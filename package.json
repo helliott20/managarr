@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "path-browserify": "^1.0.1",
+    "react-beautiful-dnd": "^13.1.1"
+  }
+}

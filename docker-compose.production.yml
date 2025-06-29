@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  managarr:
+    build: .
+    container_name: managarr
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - /path/to/your/media:/media:ro  # Update this path
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CONFIG_PATH=/app/config
+      - DATA_PATH=/app/data
+    networks:
+      - managarr-network
+    depends_on:
+      - database
+    healthcheck:
+      test: ["CMD", "node", "backend/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  database:
+    image: postgres:15-alpine
+    container_name: managarr-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=managarr
+      - POSTGRES_USER=managarr
+      - POSTGRES_PASSWORD=changeme123  # Change this!
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - managarr-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U managarr"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  managarr-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

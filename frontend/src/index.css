@@ -1,0 +1,121 @@
+/* src/index.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #10131a;
+  color: #e5e7eb;
+}
+
+/* Hide scrollbars for horizontal media rows but maintain functionality */
+.MuiBox-root {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent; /* Firefox */
+}
+
+.MuiBox-root::-webkit-scrollbar {
+  height: 5px;
+  width: 5px;
+}
+
+.MuiBox-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.MuiBox-root::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: transparent;
+}
+
+/* Badge styles for movie/series/available */
+.media-badge {
+  position: absolute;
+  z-index: 1;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.media-badge-top-left {
+  top: 8px;
+  left: 8px;
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.media-badge-top-right {
+  top: 8px;
+  right: 8px;
+  background-color: rgba(26, 217, 145, 0.7);
+  color: white;
+}
+
+/* Card hover effects */
+.media-card {
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.media-card:hover {
+  transform: scale(1.05);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+
+/* Sidebar active item */
+.sidebar-item.active {
+  background-color: rgba(124, 92, 255, 0.2);
+  color: #7c5cff;
+}
+
+.sidebar-item.active .MuiListItemIcon-root {
+  color: #7c5cff;
+}
+
+/* Slick gradient background for header content */
+.header-gradient {
+  background: linear-gradient(180deg, rgba(16, 19, 26, 0.8) 0%, rgba(16, 19, 26, 0) 100%);
+}
+
+/* Status badges */
+.status-badge {
+  height: 24px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-badge-available {
+  background-color: #1ad991;
+  color: #10131a;
+}
+
+.status-badge-pending {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+/* Custom scrollbar for the main content */
+html::-webkit-scrollbar {
+  width: 8px;
+}
+
+html::-webkit-scrollbar-track {
+  background: #10131a;
+}
+
+html::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) #10131a;
+}

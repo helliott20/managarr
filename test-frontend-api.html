@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Frontend API Calls</title>
+</head>
+<body>
+    <h1>Testing Frontend API Calls</h1>
+    <div id="results"></div>
+
+    <script>
+        async function testAPIs() {
+            const resultsDiv = document.getElementById('results');
+            
+            try {
+                resultsDiv.innerHTML += '<p>Testing settings API...</p>';
+                
+                const settingsResponse = await fetch('http://localhost:5000/api/settings');
+                const settingsData = await settingsResponse.json();
+                
+                resultsDiv.innerHTML += '<p>Settings: ' + JSON.stringify(settingsData, null, 2) + '</p>';
+                
+                if (settingsData.sonarr && settingsData.sonarr.enabled) {
+                    resultsDiv.innerHTML += '<p>Testing Sonarr disk space API...</p>';
+                    
+                    const sonarrResponse = await fetch('http://localhost:5000/api/integrations/sonarr/diskspace');
+                    const sonarrData = await sonarrResponse.json();
+                    
+                    resultsDiv.innerHTML += '<p>Sonarr disk space: ' + JSON.stringify(sonarrData, null, 2) + '</p>';
+                }
+                
+                if (settingsData.radarr && settingsData.radarr.enabled) {
+                    resultsDiv.innerHTML += '<p>Testing Radarr disk space API...</p>';
+                    
+                    const radarrResponse = await fetch('http://localhost:5000/api/integrations/radarr/diskspace');
+                    const radarrData = await radarrResponse.json();
+                    
+                    resultsDiv.innerHTML += '<p>Radarr disk space: ' + JSON.stringify(radarrData, null, 2) + '</p>';
+                }
+                
+            } catch (error) {
+                resultsDiv.innerHTML += '<p style="color: red;">Error: ' + error.message + '</p>';
+                console.error('API Test Error:', error);
+            }
+        }
+        
+        testAPIs();
+    </script>
+</body>
+</html>
