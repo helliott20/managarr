@@ -1,4 +1,5 @@
 // backend/routes/localMedia.js
+const { createLogger } = require('../logger');
 const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
@@ -6,13 +7,15 @@ const path = require('path');
 const { PathMapping, LocalScanStatus, Media } = require('../database');
 const { Op } = require('sequelize');
 
+const log = createLogger('localMedia');
+
 // Get all path mappings
 router.get('/mappings', async (req, res) => {
   try {
     const mappings = await PathMapping.findAll();
     res.json(mappings);
   } catch (error) {
-    console.error('Error getting path mappings:', error);
+    log.error({ error }, 'Error getting path mappings');
     res.status(500).json({ error: 'Failed to get path mappings' });
   }
 });
@@ -35,7 +38,7 @@ router.post('/mappings', async (req, res) => {
     
     res.status(201).json(newMapping);
   } catch (error) {
-    console.error('Error adding path mapping:', error);
+    log.error({ error }, 'Error adding path mapping');
     res.status(500).json({ error: 'Failed to add path mapping' });
   }
 });
@@ -61,7 +64,7 @@ router.put('/mappings/:id', async (req, res) => {
     
     res.json(mapping);
   } catch (error) {
-    console.error('Error updating path mapping:', error);
+    log.error({ error }, 'Error updating path mapping');
     res.status(500).json({ error: 'Failed to update path mapping' });
   }
 });
@@ -81,7 +84,7 @@ router.delete('/mappings/:id', async (req, res) => {
     
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting path mapping:', error);
+    log.error({ error }, 'Error deleting path mapping');
     res.status(500).json({ error: 'Failed to delete path mapping' });
   }
 });
@@ -137,7 +140,7 @@ router.get('/', async (req, res) => {
     
     res.json({ media: files });
   } catch (error) {
-    console.error('Error getting local files:', error);
+    log.error({ error }, 'Error getting local files');
     res.status(500).json({ error: 'Failed to get local files' });
   }
 });
@@ -147,35 +150,35 @@ router.post('/scan', async (req, res) => {
   try {
     const { directory } = req.body;
     
-    console.log(`Received scan request for directory: ${directory}`);
+    log.info({ directory }, 'Received scan request');
     
     if (!directory) {
-      console.log('Error: Directory path is required');
+      log.warn('Directory path is required');
       return res.status(400).json({ error: 'Directory path is required' });
     }
     
     // Check if directory exists
     try {
-      console.log(`Checking if directory exists: ${directory}`);
+      log.debug({ directory }, 'Checking if directory exists');
       await fs.access(directory);
-      console.log(`Directory exists and is accessible: ${directory}`);
+      log.debug({ directory }, 'Directory exists and is accessible');
     } catch (error) {
-      console.error(`Directory access error:`, error);
+      log.error({ error, directory }, 'Directory access error');
       return res.status(400).json({ error: `Directory does not exist or is not accessible: ${directory}` });
     }
     
     // Initialize scan status
-    console.log('Checking for existing scan in progress');
+    log.debug('Checking for existing scan in progress');
     let scanStatus = await LocalScanStatus.findOne({ where: { status: { [Op.ne]: 'idle' } } });
     
     if (scanStatus) {
-      console.log(`Found existing scan in progress: ${scanStatus.id}`);
+      log.info({ scanId: scanStatus.id }, 'Found existing scan in progress');
       // If there's already a scan in progress, return its status
       return res.json(scanStatus);
     }
     
     // Create new scan status
-    console.log('Creating new scan status');
+    log.debug('Creating new scan status');
     scanStatus = await LocalScanStatus.create({
       status: 'counting',
       progress: 0,
@@ -186,25 +189,25 @@ router.post('/scan', async (req, res) => {
       details: { directory }
     });
     
-    console.log(`Created new scan status with ID: ${scanStatus.id}`);
+    log.info({ scanId: scanStatus.id }, 'Created new scan status');
     
     // Return the initial scan status to the client
     res.json(scanStatus);
     
     // Count files first (in the background)
-    console.log(`Counting files in directory: ${directory}`);
+    log.info({ directory }, 'Counting files in directory');
     try {
       const totalFiles = await countFiles(directory);
-      console.log(`Found ${totalFiles} media files in directory: ${directory}`);
+      log.info({ totalFiles, directory }, 'Found media files in directory');
       
       // Update scan status with total files and change status to scanning
       scanStatus.totalFiles = totalFiles;
       scanStatus.status = 'scanning';
       await scanStatus.save();
-      console.log(`Updated scan status with total files: ${totalFiles}`);
+      log.debug({ totalFiles }, 'Updated scan status with total files');
       
       // Start scan process in background
-      console.log(`Starting scan process for directory: ${directory}`);
+      log.info({ directory }, 'Starting scan process');
       await processDirectory(directory, scanStatus);
       
       // Update scan status to completed
@@ -212,9 +215,9 @@ router.post('/scan', async (req, res) => {
       scanStatus.progress = 100;
       scanStatus.endTime = new Date();
       await scanStatus.save();
-      console.log(`Scan completed for directory: ${directory}`);
+      log.info({ directory }, 'Scan completed');
     } catch (countError) {
-      console.error('Error counting or processing files:', countError);
+      log.error({ error: countError }, 'Error counting or processing files');
       
       // Update scan status to error
       scanStatus.status = 'error';
@@ -223,7 +226,7 @@ router.post('/scan', async (req, res) => {
       await scanStatus.save();
     }
   } catch (error) {
-    console.error('Error starting directory scan:', error);
+    log.error({ error }, 'Error starting directory scan');
     res.status(500).json({ error: `Failed to start directory scan: ${error.message}` });
   }
 });
@@ -251,7 +254,7 @@ router.get('/scan/progress', async (req, res) => {
     
     res.json(scanStatus);
   } catch (error) {
-    console.error('Error getting scan progress:', error);
+    log.error({ error }, 'Error getting scan progress');
     res.status(500).json({ error: 'Failed to get scan progress' });
   }
 });
@@ -259,7 +262,7 @@ router.get('/scan/progress', async (req, res) => {
 // Reset scan status (for debugging)
 router.post('/scan/reset', async (req, res) => {
   try {
-    console.log('Resetting all scan statuses to idle');
+    log.info('Resetting all scan statuses to idle');
     
     // Find all scan statuses
     const scanStatuses = await LocalScanStatus.findAll();
@@ -272,12 +275,12 @@ router.post('/scan/reset', async (req, res) => {
       status.filesProcessed = 0;
       status.endTime = new Date();
       await status.save();
-      console.log(`Reset scan status with ID: ${status.id}`);
+      log.debug({ statusId: status.id }, 'Reset scan status');
     }
     
     res.json({ success: true, message: 'All scan statuses reset to idle' });
   } catch (error) {
-    console.error('Error resetting scan statuses:', error);
+    log.error({ error }, 'Error resetting scan statuses');
     res.status(500).json({ error: 'Failed to reset scan statuses' });
   }
 });
@@ -303,7 +306,7 @@ router.delete('/:id', async (req, res) => {
     try {
       await fs.unlink(file.path);
     } catch (fsError) {
-      console.error('Error deleting file from filesystem:', fsError);
+      log.error({ error: fsError }, 'Error deleting file from filesystem');
       // Continue even if file doesn't exist on filesystem
     }
     
@@ -312,7 +315,7 @@ router.delete('/:id', async (req, res) => {
     
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting file:', error);
+    log.error({ error }, 'Error deleting file');
     res.status(500).json({ error: 'Failed to delete file' });
   }
 });
@@ -336,74 +339,73 @@ router.patch('/:id/protect', async (req, res) => {
     
     res.json(file);
   } catch (error) {
-    console.error('Error toggling file protection:', error);
+    log.error({ error }, 'Error toggling file protection');
     res.status(500).json({ error: 'Failed to toggle file protection' });
   }
 });
 
 // Helper function to scan directory recursively
 async function scanDirectory(directoryPath, scanStatusId) {
-  console.log(`scanDirectory called with path: ${directoryPath}, scanStatusId: ${scanStatusId}`);
+  log.debug({ directoryPath, scanStatusId }, 'scanDirectory called');
   
   try {
     // Get scan status
-    console.log(`Fetching scan status with ID: ${scanStatusId}`);
+    log.debug({ scanStatusId }, 'Fetching scan status');
     const scanStatus = await LocalScanStatus.findByPk(scanStatusId);
     
     if (!scanStatus) {
-      console.error(`Scan status not found for ID: ${scanStatusId}`);
+      log.error({ scanStatusId }, 'Scan status not found');
       return;
     }
     
-    console.log(`Found scan status: ${JSON.stringify(scanStatus.toJSON())}`);
+    log.debug({ scanStatus: scanStatus.toJSON() }, 'Found scan status');
     
     // Check if directory exists before proceeding
     try {
-      console.log(`Checking if directory exists: ${directoryPath}`);
+      log.debug({ directoryPath }, 'Checking if directory exists in scan');
       await fs.access(directoryPath);
-      console.log(`Directory exists and is accessible: ${directoryPath}`);
+      log.debug({ directoryPath }, 'Directory exists and is accessible in scan');
     } catch (accessError) {
-      console.error(`Directory access error:`, accessError);
+      log.error({ error: accessError, directoryPath }, 'Directory access error in scan');
       
       // Update scan status to error
-      console.log(`Updating scan status to error: Directory not accessible`);
+      log.info('Updating scan status to error: Directory not accessible');
       scanStatus.status = 'error';
       scanStatus.error = `Directory does not exist or is not accessible: ${directoryPath}`;
       scanStatus.endTime = new Date();
       await scanStatus.save();
-      console.log(`Scan status updated to error`);
+      log.debug('Scan status updated to error');
       return;
     }
     
     // Count total files first (for progress tracking)
-    console.log(`Counting files in directory: ${directoryPath}`);
+    log.info({ directoryPath }, 'Counting files in directory for scan');
     const totalFiles = await countFiles(directoryPath);
-    console.log(`Found ${totalFiles} media files in directory: ${directoryPath}`);
+    log.info({ totalFiles, directoryPath }, 'Found media files in directory for scan');
     
     // Update scan status with total files
-    console.log(`Updating scan status with total files: ${totalFiles}`);
+    log.debug({ totalFiles }, 'Updating scan status with total files');
     scanStatus.totalFiles = totalFiles;
     await scanStatus.save();
-    console.log(`Scan status updated with total files`);
+    log.debug('Scan status updated with total files');
     
     // Process files
-    console.log(`Processing directory: ${directoryPath}`);
+    log.info({ directoryPath }, 'Processing directory');
     await processDirectory(directoryPath, scanStatus);
-    console.log(`Finished processing files in directory: ${directoryPath}`);
+    log.info({ directoryPath }, 'Finished processing files in directory');
     
     // Update scan status to completed
-    console.log(`Updating scan status to completed`);
+    log.info('Updating scan status to completed');
     scanStatus.status = 'completed';
     scanStatus.progress = 100;
     scanStatus.endTime = new Date();
     await scanStatus.save();
-    console.log(`Scan status updated to completed`);
+    log.debug('Scan status updated to completed');
   } catch (error) {
-    console.error('Error scanning directory:', error);
-    console.error('Error stack:', error.stack);
+    log.error({ error, stack: error.stack }, 'Error scanning directory');
     
     // Update scan status to error
-    console.log(`Updating scan status to error due to: ${error.message}`);
+    log.info({ errorMessage: error.message }, 'Updating scan status to error');
     const scanStatus = await LocalScanStatus.findByPk(scanStatusId);
     if (scanStatus) {
       scanStatus.status = 'error';
@@ -420,71 +422,70 @@ async function scanDirectory(directoryPath, scanStatusId) {
       scanStatus.error = errorMessage;
       scanStatus.endTime = new Date();
       await scanStatus.save();
-      console.log(`Scan status updated to error: ${errorMessage}`);
+      log.debug({ errorMessage }, 'Scan status updated to error');
     } else {
-      console.error(`Could not find scan status with ID: ${scanStatusId} to update error`);
+      log.error({ scanStatusId }, 'Could not find scan status to update error');
     }
   }
 }
 
 // Helper function to count files recursively
 async function countFiles(directoryPath) {
-  console.log(`countFiles called with path: ${directoryPath}`);
+  log.debug({ directoryPath }, 'countFiles called');
   let count = 0;
   
   try {
     // Check if directory exists
     try {
-      console.log(`Checking if directory exists: ${directoryPath}`);
+      log.debug({ directoryPath }, 'Checking if directory exists for counting');
       await fs.access(directoryPath);
-      console.log(`Directory exists and is accessible: ${directoryPath}`);
+      log.debug({ directoryPath }, 'Directory exists and is accessible for counting');
     } catch (accessError) {
-      console.error(`Directory does not exist or is not accessible: ${directoryPath}`, accessError);
+      log.error({ error: accessError, directoryPath }, 'Directory does not exist or is not accessible for counting');
       return 0;
     }
     
     // Read directory contents
-    console.log(`Reading directory contents: ${directoryPath}`);
+    log.debug({ directoryPath }, 'Reading directory contents for counting');
     const items = await fs.readdir(directoryPath);
-    console.log(`Found ${items.length} items in directory: ${directoryPath}`);
+    log.debug({ itemCount: items.length, directoryPath }, 'Found items in directory for counting');
     
     for (const item of items) {
       try {
         const itemPath = path.join(directoryPath, item);
-        console.log(`Processing item: ${itemPath}`);
+        log.debug({ itemPath }, 'Processing item for counting');
         
         // Check if item exists
         try {
           await fs.access(itemPath);
         } catch (itemAccessError) {
-          console.error(`Item does not exist or is not accessible: ${itemPath}`, itemAccessError);
+          log.warn({ error: itemAccessError, itemPath }, 'Item does not exist or is not accessible');
           continue;
         }
         
-        console.log(`Getting stats for item: ${itemPath}`);
+        log.debug({ itemPath }, 'Getting stats for item');
         const stats = await fs.stat(itemPath);
         
         if (stats.isDirectory()) {
-          console.log(`Item is a directory, recursing: ${itemPath}`);
+          log.debug({ itemPath }, 'Item is a directory, recursing');
           const subCount = await countFiles(itemPath);
-          console.log(`Subdirectory ${itemPath} contains ${subCount} media files`);
+          log.debug({ subCount, itemPath }, 'Subdirectory contains media files');
           count += subCount;
         } else if (isMediaFile(item)) {
-          console.log(`Found media file: ${itemPath}`);
+          log.debug({ itemPath }, 'Found media file');
           count++;
         } else {
-          console.log(`Skipping non-media file: ${itemPath}`);
+          log.debug({ itemPath }, 'Skipping non-media file');
         }
       } catch (itemError) {
-        console.error(`Error processing item in directory ${directoryPath}:`, itemError);
+        log.error({ error: itemError, directoryPath }, 'Error processing item in directory');
         // Continue with next item
       }
     }
     
-    console.log(`Directory ${directoryPath} contains ${count} media files (including subdirectories)`);
+    log.info({ directoryPath, count }, 'Directory contains media files (including subdirectories)');
   } catch (error) {
-    console.error(`Error counting files in directory ${directoryPath}:`, error);
-    console.error('Error stack:', error.stack);
+    log.error({ error, stack: error.stack, directoryPath }, 'Error counting files in directory');
   }
   
   return count;
@@ -492,7 +493,7 @@ async function countFiles(directoryPath) {
 
 // Helper function to process directory recursively
 async function processDirectory(directoryPath, scanStatus) {
-  console.log(`processDirectory called with path: ${directoryPath}`);
+  log.debug({ directoryPath }, 'processDirectory called');
   
   try {
     // Check if directory exists
@@ -519,15 +520,15 @@ async function processDirectory(directoryPath, scanStatus) {
         try {
           await fs.access(itemPath);
         } catch (itemAccessError) {
-          console.error(`Item does not exist or is not accessible: ${itemPath}`, itemAccessError);
+          log.warn({ error: itemAccessError, itemPath }, 'Item does not exist or is not accessible');
           continue;
         }
         
-        console.log(`Getting stats for item: ${itemPath}`);
+        log.debug({ itemPath }, 'Getting stats for item');
         const stats = await fs.stat(itemPath);
         
         if (stats.isDirectory()) {
-          console.log(`Item is a directory, recursing: ${itemPath}`);
+          log.debug({ itemPath }, 'Item is a directory, recursing');
           await processDirectory(itemPath, scanStatus);
         } else if (isMediaFile(item)) {
           console.log(`Found media file, processing: ${itemPath}`);
@@ -545,10 +546,10 @@ async function processDirectory(directoryPath, scanStatus) {
           await processFile(itemPath, stats);
           console.log(`File processed: ${itemPath}`);
         } else {
-          console.log(`Skipping non-media file: ${itemPath}`);
+          log.debug({ itemPath }, 'Skipping non-media file');
         }
       } catch (itemError) {
-        console.error(`Error processing item in directory ${directoryPath}:`, itemError);
+        log.error({ error: itemError, directoryPath }, 'Error processing item in directory');
         console.error('Error stack:', itemError.stack);
         // Continue with next item
       }
@@ -563,30 +564,30 @@ async function processDirectory(directoryPath, scanStatus) {
 
 // Helper function to process a file
 async function processFile(filePath, stats) {
-  console.log(`processFile called with path: ${filePath}`);
+  log.debug({ filePath }, 'processFile called');
   
   try {
     const filename = path.basename(filePath);
-    console.log(`Processing file: ${filename}`);
+    log.debug({ filename }, 'Processing file');
     
     const fileType = getFileType(filename);
-    console.log(`Determined file type: ${fileType}`);
+    log.debug({ fileType, filename }, 'Determined file type');
     
     // Check if file already exists in database
-    console.log(`Checking if file already exists in database: ${filePath}`);
+    log.debug({ filePath }, 'Checking if file already exists in database');
     const existingFile = await Media.findOne({
       where: { path: filePath }
     });
     
     if (existingFile) {
-      console.log(`File exists in database, updating: ${filePath}`);
+      log.debug({ filePath }, 'File exists in database, updating');
       // Update existing file
       existingFile.size = stats.size;
       existingFile.lastAccessed = stats.atime;
       await existingFile.save();
-      console.log(`File updated in database: ${filePath}`);
+      log.debug({ filePath }, 'File updated in database');
     } else {
-      console.log(`File does not exist in database, creating: ${filePath}`);
+      log.debug({ filePath }, 'File does not exist in database, creating');
       // Create new file
       const newFile = await Media.create({
         path: filePath,
@@ -596,11 +597,10 @@ async function processFile(filePath, stats) {
         created: stats.birthtime || stats.ctime,
         lastAccessed: stats.atime
       });
-      console.log(`File created in database with ID: ${newFile.id}`);
+      log.debug({ filePath, fileId: newFile.id }, 'File created in database');
     }
   } catch (error) {
-    console.error(`Error processing file ${filePath}:`, error);
-    console.error('Error stack:', error.stack);
+    log.error({ error, stack: error.stack, filePath }, 'Error processing file');
     // Continue with next file
   }
 }

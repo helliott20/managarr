@@ -1,7 +1,10 @@
 // backend/services/syncScheduler.js
+const { createLogger } = require('../logger');
 const { Settings } = require('../database');
 const axios = require('axios');
 const notificationService = require('./notificationService');
+
+const log = createLogger('syncScheduler');
 
 class SyncScheduler {
   constructor() {
@@ -27,7 +30,7 @@ class SyncScheduler {
       try {
         callback(data);
       } catch (error) {
-        console.error('Error in sync progress callback:', error);
+        log.error({ error }, 'Error in sync progress callback');
       }
     });
   }
@@ -52,7 +55,7 @@ class SyncScheduler {
       const settings = await Settings.findOne();
       return settings || { sonarr: {}, radarr: {} };
     } catch (error) {
-      console.error('Error getting sync settings:', error);
+      log.error({ error }, 'Error getting sync settings');
       return { sonarr: {}, radarr: {} };
     }
   }
@@ -62,7 +65,7 @@ class SyncScheduler {
     const { sonarr } = settings;
     
     if (!sonarr?.enabled || !sonarr?.url || !sonarr?.apiKey) {
-      console.log('Sonarr not configured or disabled, skipping sync');
+      log.info('Sonarr not configured or disabled, skipping sync');
       return;
     }
 
@@ -73,7 +76,7 @@ class SyncScheduler {
         timestamp: new Date()
       });
 
-      console.log('🔄 Starting Sonarr sync via enhanced sync API...');
+      log.info('Starting Sonarr sync via enhanced sync API...');
       
       // Call the actual enhanced sync API endpoint internally
       const axios = require('axios');
@@ -82,7 +85,7 @@ class SyncScheduler {
       });
 
       if (response.data?.success) {
-        console.log('✅ Enhanced sync triggered successfully for Sonarr');
+        log.info('Enhanced sync triggered successfully for Sonarr');
         
         this.emitProgress({
           type: 'sync_complete',
@@ -96,7 +99,7 @@ class SyncScheduler {
         throw new Error('Enhanced sync failed');
       }
     } catch (error) {
-      console.error('❌ Sonarr sync failed:', error);
+      log.error({ error }, 'Sonarr sync failed');
       
       this.emitProgress({
         type: 'sync_error',
@@ -114,7 +117,7 @@ class SyncScheduler {
     const { radarr } = settings;
     
     if (!radarr?.enabled || !radarr?.url || !radarr?.apiKey) {
-      console.log('Radarr not configured or disabled, skipping sync');
+      log.info('Radarr not configured or disabled, skipping sync');
       return;
     }
 
@@ -125,7 +128,7 @@ class SyncScheduler {
         timestamp: new Date()
       });
 
-      console.log('🔄 Starting Radarr sync via enhanced sync API...');
+      log.info('Starting Radarr sync via enhanced sync API...');
       
       // The enhanced sync API handles both Sonarr and Radarr, so we just need to trigger it
       // Since Sonarr already triggered it, we can just wait and add completion notification
@@ -133,7 +136,7 @@ class SyncScheduler {
       // Wait a bit to let the sync complete
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      console.log('✅ Enhanced sync triggered successfully for Radarr');
+      log.info('Enhanced sync triggered successfully for Radarr');
       
       this.emitProgress({
         type: 'sync_complete',
@@ -144,7 +147,7 @@ class SyncScheduler {
       
       return { success: true, stats: { totalProcessed: 0, added: 0, updated: 0, deleted: 0 } };
     } catch (error) {
-      console.error('❌ Radarr sync failed:', error);
+      log.error({ error }, 'Radarr sync failed');
       
       this.emitProgress({
         type: 'sync_error',
@@ -172,7 +175,7 @@ class SyncScheduler {
           settings.sonarr.syncIntervalUnit
         );
         
-        console.log(`Scheduling Sonarr sync every ${settings.sonarr.syncIntervalValue} ${settings.sonarr.syncIntervalUnit}`);
+        log.info({ interval: settings.sonarr.syncIntervalValue, unit: settings.sonarr.syncIntervalUnit }, 'Scheduling Sonarr sync');
         
         // Initial sync
         await this.syncSonarr(settings);
@@ -191,7 +194,7 @@ class SyncScheduler {
           settings.radarr.syncIntervalUnit
         );
         
-        console.log(`Scheduling Radarr sync every ${settings.radarr.syncIntervalValue} ${settings.radarr.syncIntervalUnit}`);
+        log.info({ interval: settings.radarr.syncIntervalValue, unit: settings.radarr.syncIntervalUnit }, 'Scheduling Radarr sync');
         
         // Initial sync
         await this.syncRadarr(settings);
@@ -204,10 +207,10 @@ class SyncScheduler {
       }
 
       this.isRunning = true;
-      console.log('Sync scheduler started successfully');
+      log.info('Sync scheduler started successfully');
       
     } catch (error) {
-      console.error('Error starting sync scheduler:', error);
+      log.error({ error }, 'Error starting sync scheduler');
       throw error;
     }
   }
@@ -217,22 +220,22 @@ class SyncScheduler {
     if (this.sonarrInterval) {
       clearInterval(this.sonarrInterval);
       this.sonarrInterval = null;
-      console.log('Sonarr sync schedule stopped');
+      log.info('Sonarr sync schedule stopped');
     }
 
     if (this.radarrInterval) {
       clearInterval(this.radarrInterval);
       this.radarrInterval = null;
-      console.log('Radarr sync schedule stopped');
+      log.info('Radarr sync schedule stopped');
     }
 
     this.isRunning = false;
-    console.log('Sync scheduler stopped');
+    log.info('Sync scheduler stopped');
   }
 
   // Restart scheduled syncing (used when settings change)
   async restartScheduledSync() {
-    console.log('Restarting sync scheduler with updated settings...');
+    log.info('Restarting sync scheduler with updated settings...');
     this.stopScheduledSync();
     await this.startScheduledSync();
   }

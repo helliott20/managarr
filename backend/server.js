@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const moment = require('moment');
 const axios = require('axios');
+const pinoHttp = require('pino-http');
+const { logger, createLogger } = require('./logger');
 const { 
   sequelize, 
   Media, 
@@ -20,10 +22,39 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const log = createLogger('server');
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// HTTP logging middleware
+app.use(pinoHttp({
+  logger: createLogger('http'),
+  level: 'info',
+  autoLogging: {
+    ignore: (req) => {
+      // Skip logging for static files, health checks, and frequent polling
+      const skipPaths = ['/health', '/favicon.ico', '/api/notifications/summary'];
+      const skipMethods = req.method === 'OPTIONS';
+      return skipPaths.includes(req.url) || skipMethods;
+    }
+  },
+  customLogLevel: (req, res, err) => {
+    if (res.statusCode >= 400) return 'error';
+    if (res.statusCode >= 300) return 'warn';
+    return 'silent'; // Hide successful requests completely
+  },
+  serializers: {
+    req: (req) => ({
+      method: req.method,
+      url: req.url
+    }),
+    res: (res) => ({
+      status: res.statusCode
+    })
+  }
+}));
 
 // Import and mount safe routes FIRST to give them precedence over dangerous direct routes
 const localMediaRoutes = require('./routes/localMedia');
@@ -43,22 +74,22 @@ app.use('/api/notifications', notificationRoutes);
 
 // Initialize database
 initializeDatabase().then(async () => {
-  console.log('Database initialized');
+  log.info('Database initialized');
   
   // Initialize deletion executor service
   const deletionExecutor = require('./services/deletionExecutor');
-  console.log('Deletion executor service loaded');
+  log.info('Deletion executor service loaded');
   
   // Initialize sync scheduler service
   try {
     const syncScheduler = require('./services/syncScheduler');
     await syncScheduler.startScheduledSync();
-    console.log('Sync scheduler service started');
+    log.info('Sync scheduler service started');
   } catch (error) {
-    console.error('Error starting sync scheduler:', error);
+    log.error({ error }, 'Error starting sync scheduler');
   }
 }).catch(err => {
-  console.error('Database initialization error:', err);
+  log.error({ error: err }, 'Database initialization error');
 });
 
 // Mock database for fallback if needed
@@ -242,10 +273,10 @@ app.patch('/api/media/:id/protect', async (req, res) => {
     const { id } = req.params;
     const { protected } = req.body;
     
-    console.log(`Protect API called for id: ${id}, protected: ${protected}`);
+    req.log.info({ id, protected }, 'Protect API called');
     
     if (protected === undefined) {
-      console.log('Protected status is required');
+      req.log.warn('Protected status is required');
       return res.status(400).json({ 
         success: false, 
         message: 'Protected status is required' 
@@ -254,10 +285,10 @@ app.patch('/api/media/:id/protect', async (req, res) => {
     
     if (!useSqlite) {
       // Use mock data
-      console.log('Using mock data');
+      req.log.info('Using mock data');
       const mediaIndex = mockDb.media.findIndex(m => m._id === id);
       if (mediaIndex === -1) {
-        console.log('Media not found in mock DB');
+        req.log.warn({ id }, 'Media not found in mock DB');
         return res.status(404).json({ 
           success: false, 
           message: 'Media not found' 
@@ -265,7 +296,7 @@ app.patch('/api/media/:id/protect', async (req, res) => {
       }
       
       mockDb.media[mediaIndex].protected = protected;
-      console.log(`Updated mock media: ${JSON.stringify(mockDb.media[mediaIndex])}`);
+      req.log.info({ media: mockDb.media[mediaIndex] }, 'Updated mock media');
       
       return res.json({
         success: true,
@@ -274,7 +305,7 @@ app.patch('/api/media/:id/protect', async (req, res) => {
     }
     
     // Use SQLite with Sequelize
-    console.log('Using SQLite database');
+    req.log.info('Using SQLite database');
     
     // Import Sequelize operators
     const { Op } = require('sequelize');
@@ -284,7 +315,7 @@ app.patch('/api/media/:id/protect', async (req, res) => {
     
     // If not found, try to find by metadata.plexId or other identifiers
     if (!media) {
-      console.log(`Media not found by primary key ${id}, trying to find by metadata`);
+      req.log.info({ id }, 'Media not found by primary key, trying to find by metadata');
       
       // Import Sequelize operators
       const { Op } = require('sequelize');
@@ -301,20 +332,20 @@ app.patch('/api/media/:id/protect', async (req, res) => {
           }
         });
       } catch (findError) {
-        console.error('Error finding media by metadata:', findError);
+        req.log.error({ error: findError }, 'Error finding media by metadata');
         // Try a simpler query if the complex one fails
         try {
           media = await Media.findOne({
             where: sequelize.literal(`json_extract(metadata, '$.sonarrId') = '${id}'`)
           });
         } catch (simpleError) {
-          console.error('Error with simple query:', simpleError);
+          req.log.error({ error: simpleError }, 'Error with simple query');
         }
       }
       
       // If still not found, create a new media entry
       if (!media) {
-        console.log(`Media not found by metadata, creating new entry for id: ${id}`);
+        req.log.info({ id }, 'Media not found by metadata, creating new entry');
         media = await Media.create({
           path: `/virtual/${id}`,
           filename: `virtual-${id}`,
@@ -327,24 +358,24 @@ app.patch('/api/media/:id/protect', async (req, res) => {
             virtual: true
           }
         });
-        console.log(`Created new media entry: ${JSON.stringify(media.toJSON())}`);
+        req.log.info({ media: media.toJSON() }, 'Created new media entry');
       } else {
-        console.log(`Found media by metadata: ${JSON.stringify(media.toJSON())}`);
+        req.log.info({ media: media.toJSON() }, 'Found media by metadata');
       }
     } else {
-      console.log(`Found media by primary key: ${JSON.stringify(media.toJSON())}`);
+      req.log.info({ media: media.toJSON() }, 'Found media by primary key');
     }
     
     // Update the protected status
     await media.update({ protected });
-    console.log(`Updated media protected status to ${protected}`);
+    req.log.info({ id, protected }, 'Updated media protected status');
     
     res.json({
       success: true,
       media
     });
   } catch (err) {
-    console.error('Error in /api/media/:id/protect PATCH:', err);
+    req.log.error({ error: err }, 'Error in /api/media/:id/protect PATCH');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -411,7 +442,7 @@ app.get('/api/media', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Error in /api/media GET:', err);
+    req.log.error({ error: err }, 'Error in /api/media GET');
     
     // Fallback to mock data
     let filteredMedia = [...mockDb.media];
@@ -574,7 +605,7 @@ app.get('/api/media/stats', async (req, res) => {
       recentDeletions: recentDeletions
     });
   } catch (err) {
-    console.error('Error in /api/media/stats:', err);
+    req.log.error({ error: err }, 'Error in /api/media/stats');
     
     // Fallback to mock data on error
     // Calculate total size
@@ -668,7 +699,7 @@ app.post('/api/scan', async (req, res) => {
 async function scanDirectory(directory) {
   try {
     if (!useSqlite) {
-      console.log(`Mock scanning directory: ${directory}`);
+      log.info({ directory }, 'Mock scanning directory');
       return;
     }
     
@@ -713,9 +744,9 @@ async function scanDirectory(directory) {
       }
     }
     
-    console.log(`Scan completed for ${directory}`);
+    log.info({ directory }, 'Scan completed for directory');
   } catch (err) {
-    console.error(`Error scanning directory ${directory}:`, err);
+    log.error({ error: err, directory }, 'Error scanning directory');
   }
 }
 
@@ -729,7 +760,7 @@ app.get('/api/rules', async (req, res) => {
     const rules = await DeletionRule.findAll();
     res.json(rules);
   } catch (err) {
-    console.error('Error in /api/rules GET:', err);
+    req.log.error({ error: err }, 'Error in /api/rules GET');
     res.status(500).json({ message: err.message });
   }
 });
@@ -750,7 +781,7 @@ app.post('/api/rules', async (req, res) => {
     const newRule = await DeletionRule.create(req.body);
     res.status(201).json(newRule);
   } catch (err) {
-    console.error('Error in /api/rules POST:', err);
+    req.log.error({ error: err }, 'Error in /api/rules POST');
     res.status(400).json({ message: err.message });
   }
 });
@@ -771,7 +802,7 @@ app.get('/api/rules/:id', async (req, res) => {
     }
     res.json(rule);
   } catch (err) {
-    console.error('Error in /api/rules/:id GET:', err);
+    req.log.error({ error: err }, 'Error in /api/rules/:id GET');
     res.status(500).json({ message: err.message });
   }
 });
@@ -798,7 +829,7 @@ app.put('/api/rules/:id', async (req, res) => {
     await rule.update(req.body);
     res.json(rule);
   } catch (err) {
-    console.error('Error in /api/rules/:id PUT:', err);
+    req.log.error({ error: err }, 'Error in /api/rules/:id PUT');
     res.status(400).json({ message: err.message });
   }
 });
@@ -822,7 +853,7 @@ app.delete('/api/rules/:id', async (req, res) => {
     await rule.destroy();
     res.json({ message: 'Rule deleted successfully' });
   } catch (err) {
-    console.error('Error in /api/rules/:id DELETE:', err);
+    req.log.error({ error: err }, 'Error in /api/rules/:id DELETE');
     res.status(500).json({ message: err.message });
   }
 });
@@ -831,7 +862,7 @@ app.post('/api/rules/:id/run', async (req, res) => {
   try {
     // SAFETY REDIRECT: This endpoint is dangerous as it directly deletes files.
     // Redirect to the safe pending deletions workflow instead.
-    console.log(`⚠️  SAFETY REDIRECT: Dangerous direct deletion endpoint blocked. Use /api/rules/:id/create-pending-deletions instead.`);
+    req.log.warn({ ruleId: req.params.id }, 'SAFETY REDIRECT: Dangerous direct deletion endpoint blocked. Use /api/rules/:id/create-pending-deletions instead.');
     res.status(400).json({ 
       success: false,
       message: 'This endpoint has been disabled for safety. Direct file deletion is not allowed. Use the pending deletions workflow instead.',
@@ -840,7 +871,7 @@ app.post('/api/rules/:id/run', async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Error in /api/rules/:id/run:', err);
+    req.log.error({ error: err }, 'Error in /api/rules/:id/run');
     res.status(500).json({ message: err.message });
   }
 });
@@ -851,8 +882,8 @@ async function executeRule(rule) {
   const ENABLE_DIRECT_FILE_DELETION = false;
   
   if (!ENABLE_DIRECT_FILE_DELETION) {
-    console.log(`⚠️  SAFETY MODE: Direct file deletion is disabled. Rule "${rule.name}" would have deleted files but this is blocked for safety.`);
-    console.log(`⚠️  Use the safe pending deletions workflow in routes/rules.js instead.`);
+    log.warn({ ruleName: rule.name }, 'SAFETY MODE: Direct file deletion is disabled. Rule would have deleted files but this is blocked for safety.');
+    log.warn('Use the safe pending deletions workflow in routes/rules.js instead.');
     return {
       success: false,
       message: 'Direct file deletion is disabled for safety. Use pending deletions workflow instead.',
@@ -936,7 +967,7 @@ async function executeRule(rule) {
         // Remove from database
         await file.destroy();
       } catch (err) {
-        console.error(`Error deleting ${file.path}:`, err);
+        log.error({ error: err, filePath: file.path }, 'Error deleting file');
       }
     }
     
@@ -950,9 +981,9 @@ async function executeRule(rule) {
     rule.lastRun = new Date();
     await rule.save();
     
-    console.log(`Rule "${rule.name}" executed: ${filesToDelete.length} files deleted`);
+    log.info({ ruleName: rule.name, filesDeleted: filesToDelete.length }, 'Rule executed');
   } catch (err) {
-    console.error(`Error executing rule "${rule.name}":`, err);
+    log.error({ error: err, ruleName: rule.name }, 'Error executing rule');
   }
 }
 
@@ -961,7 +992,7 @@ app.post('/api/cleanup', async (req, res) => {
   try {
     // SAFETY BLOCK: This endpoint is dangerous as it directly deletes files via executeRule.
     // Block all cleanup operations that use direct file deletion.
-    console.log(`⚠️  SAFETY BLOCK: Dangerous cleanup endpoint blocked. This would directly delete files without confirmation.`);
+    req.log.warn('SAFETY BLOCK: Dangerous cleanup endpoint blocked. This would directly delete files without confirmation.');
     res.status(400).json({ 
       success: false,
       message: 'This cleanup endpoint has been disabled for safety. Direct file deletion is not allowed. Use the pending deletions workflow instead.',
@@ -970,7 +1001,7 @@ app.post('/api/cleanup', async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Error in /api/cleanup POST:', err);
+    req.log.error({ error: err }, 'Error in /api/cleanup POST');
     res.status(500).json({ message: err.message });
   }
 });
@@ -989,7 +1020,7 @@ app.get('/api/cleanup/history', async (req, res) => {
     
     res.json(history);
   } catch (err) {
-    console.error('Error in /api/cleanup/history GET:', err);
+    req.log.error({ error: err }, 'Error in /api/cleanup/history GET');
     res.status(500).json({ message: err.message });
   }
 });
@@ -1006,7 +1037,7 @@ app.get('/api/settings', async (req, res) => {
     const settings = await Settings.findOne();
     res.json(settings || {});
   } catch (err) {
-    console.error('Error in /api/settings GET:', err);
+    req.log.error({ error: err }, 'Error in /api/settings GET');
     // Fallback to mock data
     res.json(mockDb.settings);
   }
@@ -1026,9 +1057,9 @@ app.put('/api/settings', async (req, res) => {
         try {
           const syncScheduler = require('./services/syncScheduler');
           await syncScheduler.restartScheduledSync();
-          console.log('Sync scheduler restarted with new settings');
+          req.log.info('Sync scheduler restarted with new settings');
         } catch (error) {
-          console.error('Error restarting sync scheduler:', error);
+          req.log.error({ error }, 'Error restarting sync scheduler');
         }
       }
       
@@ -1054,15 +1085,15 @@ app.put('/api/settings', async (req, res) => {
       try {
         const syncScheduler = require('./services/syncScheduler');
         await syncScheduler.restartScheduledSync();
-        console.log('Sync scheduler restarted with new settings');
+        req.log.info('Sync scheduler restarted with new settings');
       } catch (error) {
-        console.error('Error restarting sync scheduler:', error);
+        req.log.error({ error }, 'Error restarting sync scheduler');
       }
     }
     
     res.json(updatedSettings);
   } catch (err) {
-    console.error('Error in /api/settings PUT:', err);
+    req.log.error({ error: err }, 'Error in /api/settings PUT');
     // Update mock data and return
     mockDb.settings = {
       ...mockDb.settings,
@@ -1075,24 +1106,24 @@ app.put('/api/settings', async (req, res) => {
 // Clear deletion data endpoint (for testing/development)
 app.delete('/api/admin/clear-deletions', async (req, res) => {
   try {
-    console.log('Clearing deletion data...');
+    req.log.info('Clearing deletion data...');
     
     // Clear all deletion history
     const deletionHistoryCount = await DeletionHistory.count();
-    console.log(`Found ${deletionHistoryCount} deletion history records`);
+    req.log.info({ deletionHistoryCount }, 'Found deletion history records');
     
     if (deletionHistoryCount > 0) {
       await DeletionHistory.destroy({ where: {} });
-      console.log('✅ Cleared all deletion history records');
+      req.log.info('Cleared all deletion history records');
     }
 
     // Clear all pending deletions 
     const pendingDeletionsCount = await PendingDeletion.count();
-    console.log(`Found ${pendingDeletionsCount} pending deletion records`);
+    req.log.info({ pendingDeletionsCount }, 'Found pending deletion records');
     
     if (pendingDeletionsCount > 0) {
       await PendingDeletion.destroy({ where: {} });
-      console.log('✅ Cleared all pending deletion records');
+      req.log.info('Cleared all pending deletion records');
     }
 
     res.json({
@@ -1102,7 +1133,7 @@ app.delete('/api/admin/clear-deletions', async (req, res) => {
       pendingDeletionsCleared: pendingDeletionsCount
     });
   } catch (error) {
-    console.error('❌ Error clearing deletion data:', error);
+    req.log.error({ error }, 'Error clearing deletion data');
     res.status(500).json({
       success: false,
       message: 'Error clearing deletion data',
@@ -1122,7 +1153,7 @@ async function makeRequestWithRetry(url, options, maxRetries = 5, retryDelay = 3
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`API request attempt ${attempt}/${maxRetries}: ${url}`);
+      log.info({ attempt, maxRetries, url }, 'API request attempt');
       const response = await axios(url, options);
       return response;
     } catch (error) {
@@ -1132,23 +1163,23 @@ async function makeRequestWithRetry(url, options, maxRetries = 5, retryDelay = 3
       if (error.response) {
         // The request was made and the server responded with a status code
         // that falls out of the range of 2xx
-        console.error(`Attempt ${attempt}/${maxRetries} failed with status ${error.response.status}:`, error.message);
-        console.error('Response data:', error.response.data);
+        log.error({ attempt, maxRetries, status: error.response.status, error: error.message }, 'Request failed with status');
+        log.error({ responseData: error.response.data }, 'Response data');
       } else if (error.request) {
         // The request was made but no response was received
-        console.error(`Attempt ${attempt}/${maxRetries} failed (no response):`, error.message);
+        log.error({ attempt, maxRetries, error: error.message }, 'Request failed (no response)');
         if (error.code === 'ECONNABORTED') {
-          console.error('Request timed out. Consider increasing the timeout value.');
+          log.error('Request timed out. Consider increasing the timeout value.');
         }
       } else {
         // Something happened in setting up the request that triggered an Error
-        console.error(`Attempt ${attempt}/${maxRetries} failed (request setup):`, error.message);
+        log.error({ attempt, maxRetries, error: error.message }, 'Request failed (request setup)');
       }
       
       // If this is not the last attempt, wait before retrying
       if (attempt < maxRetries) {
         const delay = retryDelay * attempt; // Exponential backoff
-        console.log(`Retrying in ${delay}ms...`);
+        log.info({ delay }, 'Retrying request');
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -1182,7 +1213,7 @@ const plexApi = {
         data: response.data
       };
     } catch (error) {
-      console.error('Plex connection test failed:', error.message);
+      log.error({ error: error.message }, 'Plex connection test failed');
       return {
         success: false,
         error: error.message
@@ -1230,7 +1261,7 @@ const plexApi = {
         libraries
       };
     } catch (error) {
-      console.error('Error getting Plex libraries:', error.message);
+      log.error({ error: error.message }, 'Error getting Plex libraries');
       return {
         success: false,
         error: error.message
@@ -1241,7 +1272,7 @@ const plexApi = {
   // Get library content
   getLibraryContent: async (serverUrl, authToken, libraryId) => {
     try {
-      console.log(`Fetching content for library ${libraryId}...`);
+      log.info({ libraryId }, 'Fetching content for library');
       
       // Make a request to get the library content
       const response = await makeRequestWithRetry(
@@ -1258,7 +1289,7 @@ const plexApi = {
       
       // Parse the response to get the content
       const contentData = response.data.MediaContainer.Metadata || [];
-      console.log(`Found ${contentData.length} items in library ${libraryId}`);
+      log.info({ itemCount: contentData.length, libraryId }, 'Found items in library');
       
       // Transform the data to match our format
       const content = [];
@@ -1312,7 +1343,7 @@ const plexApi = {
           
           content.push(contentItem);
         } catch (itemError) {
-          console.error(`Error processing item ${item.title}:`, itemError.message);
+          log.error({ error: itemError.message, itemTitle: item.title }, 'Error processing item');
         }
       }
       
@@ -1321,7 +1352,7 @@ const plexApi = {
         content
       };
     } catch (error) {
-      console.error(`Error getting content for library ${libraryId}:`, error.message);
+      log.error({ error: error.message, libraryId }, 'Error getting content for library');
       return {
         success: false,
         error: error.message
@@ -1386,7 +1417,7 @@ const plexApi = {
               }
             }
           } catch (detailsError) {
-            console.error(`Error getting details for item ${item.id}:`, detailsError.message);
+            log.error({ error: detailsError.message, itemId: item.id }, 'Error getting details for item');
           }
         }
         
@@ -1394,7 +1425,7 @@ const plexApi = {
         totalSize += (item.size || 0);
       }
       
-      console.log(`Library ${libraryId} has ${itemCount} items with total size ${totalSize} bytes`);
+      log.info({ libraryId, itemCount, totalSize }, 'Library size calculated');
       
       // Save media items to database if SQLite is available
       if (useSqlite) {
@@ -1451,16 +1482,16 @@ const plexApi = {
                     }, { transaction: t });
                   }
                 } catch (itemErr) {
-                  console.error(`Error processing item ${item.path}:`, itemErr);
+                  log.error({ error: itemErr, itemPath: item.path }, 'Error processing item');
                   // Continue with next item
                 }
               }
             }
           });
           
-          console.log(`Saved ${contentResult.content.length} media items to database for library ${libraryId}`);
+          log.info({ itemCount: contentResult.content.length, libraryId }, 'Saved media items to database for library');
         } catch (dbErr) {
-          console.error(`Error saving media items to database for library ${libraryId}:`, dbErr);
+          log.error({ error: dbErr, libraryId }, 'Error saving media items to database for library');
         }
       }
       
@@ -1470,7 +1501,7 @@ const plexApi = {
         items: itemCount
       };
     } catch (error) {
-      console.error(`Error calculating size for library ${libraryId}:`, error.message);
+      log.error({ error: error.message, libraryId }, 'Error calculating size for library');
       return {
         success: false,
         error: error.message,
@@ -1493,7 +1524,7 @@ app.post('/api/plex/test', async (req, res) => {
       });
     }
     
-    console.log(`Testing Plex connection to ${serverUrl}`);
+    req.log.info({ serverUrl }, 'Testing Plex connection');
     
     // Test the connection to the Plex server
     const connectionResult = await plexApi.testConnection(serverUrl, authToken);
@@ -1535,9 +1566,9 @@ app.post('/api/plex/test', async (req, res) => {
           });
         }
         
-        console.log('Plex settings saved to database');
+        req.log.info('Plex settings saved to database');
       } catch (dbErr) {
-        console.error('Error saving Plex settings to database:', dbErr);
+        req.log.error({ error: dbErr }, 'Error saving Plex settings to database');
       }
     }
     
@@ -1548,7 +1579,7 @@ app.post('/api/plex/test', async (req, res) => {
       data: connectionResult.data
     });
   } catch (err) {
-    console.error('Error testing Plex connection:', err);
+    req.log.error({ error: err }, 'Error testing Plex connection');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -1592,7 +1623,7 @@ app.get('/api/plex/sync/status', async (req, res) => {
     
     res.json(syncStatus);
   } catch (err) {
-    console.error('Error getting sync status:', err);
+    req.log.error({ error: err }, 'Error getting sync status');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -1614,7 +1645,7 @@ app.get('/api/plex/libraries', async (req, res) => {
     
     res.json(libraries);
   } catch (err) {
-    console.error('Error getting Plex libraries:', err);
+    req.log.error({ error: err }, 'Error getting Plex libraries');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -1656,7 +1687,7 @@ app.put('/api/plex/libraries/:id', async (req, res) => {
       library
     });
   } catch (err) {
-    console.error('Error updating Plex library:', err);
+    req.log.error({ error: err }, 'Error updating Plex library');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -1675,7 +1706,7 @@ app.post('/api/plex/sync', async (req, res) => {
       });
     }
     
-    console.log(`Syncing Plex libraries from ${serverUrl}`);
+    req.log.info({ serverUrl }, 'Syncing Plex libraries');
     
     // Create or update sync status
     let syncStatus;
@@ -1703,7 +1734,7 @@ app.post('/api/plex/sync', async (req, res) => {
     syncPlexLibraries(serverUrl, authToken, syncStatus ? syncStatus.id : null);
     
   } catch (err) {
-    console.error('Error starting Plex sync:', err);
+    req.log.error({ error: err }, 'Error starting Plex sync');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -1784,13 +1815,13 @@ async function syncPlexLibraries(serverUrl, authToken, syncId) {
                 }, { transaction: t });
               }
             } catch (libErr) {
-              console.error(`Error saving library ${library.name}:`, libErr);
+              log.error({ error: libErr, libraryName: library.name }, 'Error saving library');
               // Continue with next library
             }
           }
         });
       } catch (txErr) {
-        console.error('Transaction error saving libraries:', txErr);
+        log.error({ error: txErr }, 'Transaction error saving libraries');
         if (syncStatus) {
           await syncStatus.update({
             details: {
@@ -1854,7 +1885,7 @@ async function syncPlexLibraries(serverUrl, authToken, syncId) {
           });
         }
       } catch (sizeErr) {
-        console.error(`Error calculating size for library ${library.id}:`, sizeErr);
+        log.error({ error: sizeErr, libraryId: library.id }, 'Error calculating size for library');
         
         if (syncStatus) {
           await syncStatus.update({
@@ -1902,9 +1933,9 @@ async function syncPlexLibraries(serverUrl, authToken, syncId) {
           });
         }
         
-        console.log('Plex settings updated with last sync time');
+        log.info('Plex settings updated with last sync time');
       } catch (dbErr) {
-        console.error('Error updating Plex settings in database:', dbErr);
+        log.error({ error: dbErr }, 'Error updating Plex settings in database');
       }
     }
     
@@ -1919,9 +1950,9 @@ async function syncPlexLibraries(serverUrl, authToken, syncId) {
       });
     }
     
-    console.log('Libraries synced:', libraries);
+    log.info({ libraries }, 'Libraries synced');
   } catch (err) {
-    console.error('Error syncing Plex libraries:', err);
+    log.error({ error: err }, 'Error syncing Plex libraries');
     
     // Update sync status with error
     if (syncStatus) {
@@ -1939,7 +1970,7 @@ app.get('/api/schedule/:year/:month', async (req, res) => {
   try {
     const { year, month } = req.params;
     
-    console.log(`Getting schedule events for ${year}-${month}`);
+    req.log.info({ year, month }, 'Getting schedule events');
     
     // Generate schedule events based on Plex data
     const events = {};
@@ -1956,7 +1987,7 @@ app.get('/api/schedule/:year/:month', async (req, res) => {
           authToken = settings.plex.authToken;
         }
       } catch (dbErr) {
-        console.error('Error getting Plex settings from database:', dbErr);
+        req.log.error({ error: dbErr }, 'Error getting Plex settings from database');
       }
     }
     
@@ -1998,7 +2029,7 @@ app.get('/api/schedule/:year/:month', async (req, res) => {
           }
         }
       } catch (plexErr) {
-        console.error('Error generating events from Plex data:', plexErr);
+        req.log.error({ error: plexErr }, 'Error generating events from Plex data');
       }
     } else {
       // Generate mock events
@@ -2033,7 +2064,7 @@ app.get('/api/schedule/:year/:month', async (req, res) => {
       events
     });
   } catch (err) {
-    console.error('Error getting schedule events:', err);
+    req.log.error({ error: err }, 'Error getting schedule events');
     res.status(500).json({ 
       success: false, 
       message: err.message 
@@ -2045,5 +2076,5 @@ app.get('/api/schedule/:year/:month', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  log.info({ port: PORT }, 'Server running on port');
 });

@@ -1,6 +1,10 @@
 const { Sequelize, DataTypes } = require('sequelize');
 const path = require('path');
 const fs = require('fs');
+const { createLogger } = require('./logger');
+
+// Create logger for database module
+const log = createLogger('database');
 
 // Get database path from environment or use default
 const dbPath = process.env.SQLITE_PATH || path.join(__dirname, 'data', 'managarr.db');
@@ -15,7 +19,7 @@ if (!fs.existsSync(dbDir)) {
 const sequelize = new Sequelize({
   dialect: 'sqlite',
   storage: dbPath,
-  logging: false, // Set to console.log to see SQL queries
+  logging: process.env.LOG_SQL === 'true' ? (msg) => log.debug({ sql: msg }, 'SQL Query') : false,
   define: {
     timestamps: true // Adds createdAt and updatedAt to all models
   }
@@ -25,7 +29,8 @@ const sequelize = new Sequelize({
 const Media = sequelize.define('Media', {
   path: {
     type: DataTypes.STRING,
-    allowNull: false
+    allowNull: false,
+    unique: true
   },
   filename: {
     type: DataTypes.STRING,
@@ -138,6 +143,27 @@ const Media = sequelize.define('Media', {
     type: DataTypes.JSON,
     defaultValue: {} // Store per-user watch info
   },
+  // Tautulli integration fields
+  tautulliViewCount: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
+  },
+  tautulliLastPlayed: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  tautulliDuration: {
+    type: DataTypes.INTEGER,
+    allowNull: true // In seconds
+  },
+  tautulliWatchTime: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0 // Total watch time in seconds
+  },
+  tautulliUsers: {
+    type: DataTypes.JSON,
+    defaultValue: [] // Array of users who have watched this
+  },
   // Sonarr/Radarr integration fields
   sonarrId: {
     type: DataTypes.INTEGER,
@@ -190,7 +216,8 @@ const DeletionRule = sequelize.define('DeletionRule', {
       title: false,
       plexData: false,
       mediaSpecific: false,
-      arrIntegration: false
+      arrIntegration: false,
+      tautulli: false
     }
   },
   enabled: {
@@ -316,6 +343,24 @@ const Settings = sequelize.define('Settings', {
       version: null,
       syncIntervalValue: 24, // Default to 24
       syncIntervalUnit: 'hours' // Default to hours
+    }
+  },
+  tautulli: {
+    type: DataTypes.JSON,
+    defaultValue: {
+      enabled: false,
+      url: '',
+      apiKey: '',
+      connectionStatus: 'disconnected',
+      version: null,
+      syncIntervalValue: 6, // Default to 6 hours for watch history
+      syncIntervalUnit: 'hours',
+      lastConnectionTest: null,
+      // Tautulli-specific settings
+      historyDaysToSync: 30, // How many days of history to sync
+      syncWatchHistory: true,
+      syncActiveStreams: true,
+      syncLibraryStats: true
     }
   }
 });
@@ -570,30 +615,71 @@ async function initializeDatabase() {
     // Manually add missing columns to PendingDeletions table
     try {
       await sequelize.query('ALTER TABLE PendingDeletions ADD COLUMN executionResults JSON DEFAULT \'[]\';');
-      console.log('Added executionResults column');
+      log.debug('Added executionResults column to PendingDeletions table');
     } catch (error) {
       // Column already exists or other issue
-      console.log('executionResults column exists or failed to add:', error.message);
+      log.debug({ error: error.message }, 'executionResults column exists or failed to add');
     }
     
     try {
       await sequelize.query('ALTER TABLE PendingDeletions ADD COLUMN error TEXT;');
-      console.log('Added error column');
+      log.debug('Added error column to PendingDeletions table');
     } catch (error) {
       // Column already exists or other issue
-      console.log('error column exists or failed to add:', error.message);
+      log.debug({ error: error.message }, 'error column exists or failed to add');
     }
     
-    console.log('Database synchronized successfully');
+    // Add Tautulli column to Settings table if it doesn't exist
+    try {
+      await sequelize.query(`ALTER TABLE Settings ADD COLUMN tautulli JSON DEFAULT '${JSON.stringify({
+        enabled: false,
+        url: '',
+        apiKey: '',
+        connectionStatus: 'disconnected',
+        version: null,
+        syncIntervalValue: 6,
+        syncIntervalUnit: 'hours',
+        lastConnectionTest: null,
+        historyDaysToSync: 30,
+        syncWatchHistory: true,
+        syncActiveStreams: true,
+        syncLibraryStats: true
+      })}';`);
+      log.debug('Added tautulli column to Settings table');
+    } catch (error) {
+      // Column already exists or other issue
+      log.debug({ error: error.message }, 'tautulli column exists or failed to add');
+    }
+    
+    // Add Tautulli fields to Media table if they don't exist
+    const tautulliFields = [
+      { name: 'tautulliViewCount', type: 'INTEGER DEFAULT 0' },
+      { name: 'tautulliLastPlayed', type: 'DATE' },
+      { name: 'tautulliDuration', type: 'INTEGER' },
+      { name: 'tautulliWatchTime', type: 'INTEGER DEFAULT 0' },
+      { name: 'tautulliUsers', type: 'JSON DEFAULT \'[]\'' }
+    ];
+    
+    for (const field of tautulliFields) {
+      try {
+        await sequelize.query(`ALTER TABLE Media ADD COLUMN ${field.name} ${field.type};`);
+        log.debug({ fieldName: field.name }, 'Added column to Media table');
+      } catch (error) {
+        // Column already exists or other issue
+        log.debug({ fieldName: field.name, error: error.message }, 'Column exists or failed to add');
+      }
+    }
+    
+    log.info('Database synchronized successfully');
 
     // Create default settings if they don't exist
     const settingsCount = await Settings.count();
     if (settingsCount === 0) {
       await Settings.create({});
-      console.log('Default settings initialized');
+      log.info('Default settings initialized');
     }
   } catch (error) {
-    console.error('Error initializing database:', error);
+    log.error({ error }, 'Error initializing database');
   }
 }
 

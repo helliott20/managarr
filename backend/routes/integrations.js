@@ -1,8 +1,11 @@
 // backend/routes/integrations.js
+const { createLogger } = require('../logger');
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const { Settings } = require('../database');
+
+const log = createLogger('integrations');
 
 // Helper function for making API requests with retries
 async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2000) {
@@ -15,7 +18,7 @@ async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`API request attempt ${attempt}/${maxRetries}: ${url}`);
+      log.debug({ attempt, maxRetries, url }, 'API request attempt');
       const response = await axios(url, options);
       return response;
     } catch (error) {
@@ -25,23 +28,37 @@ async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2
       if (error.response) {
         // The request was made and the server responded with a status code
         // that falls out of the range of 2xx
-        console.error(`Attempt ${attempt}/${maxRetries} failed with status ${error.response.status}:`, error.message);
-        console.error('Response data:', error.response.data);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          status: error.response.status, 
+          message: error.message,
+          responseData: error.response.data 
+        }, 'API request failed with response error');
       } else if (error.request) {
         // The request was made but no response was received
-        console.error(`Attempt ${attempt}/${maxRetries} failed (no response):`, error.message);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          message: error.message,
+          code: error.code 
+        }, 'API request failed with no response');
         if (error.code === 'ECONNABORTED') {
-          console.error('Request timed out. Consider increasing the timeout value.');
+          log.warn('Request timed out. Consider increasing the timeout value.');
         }
       } else {
         // Something happened in setting up the request that triggered an Error
-        console.error(`Attempt ${attempt}/${maxRetries} failed (request setup):`, error.message);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          message: error.message 
+        }, 'API request failed during setup');
       }
       
       // If this is not the last attempt, wait before retrying
       if (attempt < maxRetries) {
         const delay = retryDelay * attempt; // Exponential backoff
-        console.log(`Retrying in ${delay}ms...`);
+        log.info({ delay }, 'Retrying API request');
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -62,12 +79,13 @@ async function getSettings() {
     return {
       sonarr: settings.sonarr,
       radarr: settings.radarr,
+      tautulli: settings.tautulli,
       general: settings.general,
       plex: settings.plex,
       notifications: settings.notifications
     };
   } catch (error) {
-    console.error('Error getting settings:', error);
+    log.error({ error }, 'Error getting settings');
     return {};
   }
 }
@@ -133,7 +151,7 @@ router.post('/sonarr/test', async (req, res) => {
           });
         }
       } catch (saveError) {
-        console.error('Error saving Sonarr connection status:', saveError.message);
+        log.error({ error: saveError }, 'Error saving Sonarr connection status');
       }
     }
     
@@ -153,7 +171,7 @@ router.post('/sonarr/test', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Sonarr connection test failed:', error.message);
+    log.error({ error }, 'Sonarr connection test failed');
     return res.status(400).json({
       success: false,
       error: error.message,
@@ -197,7 +215,7 @@ router.get('/sonarr/series', async (req, res) => {
       series: response.data
     });
   } catch (error) {
-    console.error('Error getting Sonarr series:', error.message);
+    log.error({ error }, 'Error getting Sonarr series');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -252,13 +270,16 @@ router.get('/sonarr/series/:id', async (req, res) => {
     const episodes = episodesResponse.data;
     const episodesWithFiles = episodes.filter(episode => episode.hasFile);
     
-    console.log(`Retrieved ${episodes.length} episodes, ${episodesWithFiles.length} have files`);
+    log.debug({ 
+      totalEpisodes: episodes.length, 
+      episodesWithFiles: episodesWithFiles.length 
+    }, 'Retrieved episodes from Sonarr');
     
     // Log a sample episode with hasFile=true to see its structure
     const sampleEpisodeWithFile = episodesWithFiles[0];
     if (sampleEpisodeWithFile) {
-      console.log(`Sample episode with hasFile=true and episodeFile:`, 
-        JSON.stringify({
+      log.debug({ 
+        sampleEpisode: {
           id: sampleEpisodeWithFile.id,
           title: sampleEpisodeWithFile.title,
           hasFile: sampleEpisodeWithFile.hasFile,
@@ -268,8 +289,8 @@ router.get('/sonarr/series/:id', async (req, res) => {
             size: sampleEpisodeWithFile.episodeFile.size,
             path: sampleEpisodeWithFile.episodeFile.path
           } : null
-        })
-      );
+        }
+      }, 'Sample episode with file');
     }
     
     // Return the series and episodes
@@ -279,7 +300,7 @@ router.get('/sonarr/series/:id', async (req, res) => {
       episodes: episodes
     });
   } catch (error) {
-    console.error(`Error getting Sonarr series ${req.params.id}:`, error.message);
+    log.error({ error, seriesId: req.params.id }, 'Error getting Sonarr series by ID');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -323,7 +344,7 @@ router.delete('/sonarr/series/:seriesId/file/:fileId', async (req, res) => {
       message: 'File deleted successfully'
     });
   } catch (error) {
-    console.error(`Error deleting Sonarr file ${req.params.fileId}:`, error.message);
+    log.error({ error, fileId: req.params.fileId }, 'Error deleting Sonarr file');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -392,7 +413,7 @@ router.post('/radarr/test', async (req, res) => {
           });
         }
       } catch (saveError) {
-        console.error('Error saving Radarr connection status:', saveError.message);
+        log.error({ error: saveError }, 'Error saving Radarr connection status');
       }
     }
     
@@ -412,7 +433,7 @@ router.post('/radarr/test', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Radarr connection test failed:', error.message);
+    log.error({ error }, 'Radarr connection test failed');
     return res.status(400).json({
       success: false,
       error: error.message,
@@ -456,7 +477,7 @@ router.get('/radarr/movies', async (req, res) => {
       movies: response.data
     });
   } catch (error) {
-    console.error('Error getting Radarr movies:', error.message);
+    log.error({ error }, 'Error getting Radarr movies');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -514,7 +535,7 @@ router.get('/radarr/movies/:id', async (req, res) => {
       files: filesResponse.data
     });
   } catch (error) {
-    console.error(`Error getting Radarr movie ${req.params.id}:`, error.message);
+    log.error({ error, movieId: req.params.id }, 'Error getting Radarr movie by ID');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -558,7 +579,7 @@ router.delete('/radarr/movies/:movieId/file/:fileId', async (req, res) => {
       message: 'File deleted successfully'
     });
   } catch (error) {
-    console.error(`Error deleting Radarr file ${req.params.fileId}:`, error.message);
+    log.error({ error, fileId: req.params.fileId }, 'Error deleting Radarr file');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -600,7 +621,7 @@ router.get('/sonarr/diskspace', async (req, res) => {
       diskspace: response.data
     });
   } catch (error) {
-    console.error('Error getting Sonarr disk space:', error.message);
+    log.error({ error }, 'Error getting Sonarr disk space');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -642,7 +663,208 @@ router.get('/radarr/diskspace', async (req, res) => {
       diskspace: response.data
     });
   } catch (error) {
-    console.error('Error getting Radarr disk space:', error.message);
+    log.error({ error }, 'Error getting Radarr disk space');
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Test Tautulli connection
+router.post('/tautulli/test', async (req, res) => {
+  try {
+    const { url, apiKey, saveStatus = false } = req.body;
+    
+    if (!url || !apiKey) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'URL and API Key are required' 
+      });
+    }
+    
+    let connectionStatus = 'disconnected';
+    let version = null;
+    let error = null;
+    
+    try {
+      // Make a request to the Tautulli API to check if it's reachable
+      const response = await makeRequestWithRetry(
+        `${url}/api/v2`, 
+        {
+          method: 'get',
+          params: {
+            apikey: apiKey,
+            cmd: 'get_server_info'
+          },
+          timeout: 10000 // 10 second timeout
+        }
+      );
+      
+      if (response.data && response.data.response && response.data.response.result === 'success') {
+        connectionStatus = 'connected';
+        version = response.data.response.data?.version || 'Unknown';
+      } else {
+        connectionStatus = 'error';
+        error = 'Invalid API response';
+      }
+    } catch (testError) {
+      connectionStatus = 'error';
+      error = testError.message;
+    }
+    
+    // If saveStatus is true, update the settings in the database
+    if (saveStatus) {
+      try {
+        const settings = await Settings.findOne({ where: { id: 1 } });
+        const currentTautulliSettings = settings ? settings.tautulli : {};
+        
+        const updatedTautulliSettings = {
+          ...currentTautulliSettings,
+          url,
+          apiKey,
+          connectionStatus,
+          version,
+          lastConnectionTest: new Date().toISOString()
+        };
+        
+        if (settings) {
+          await settings.update({ tautulli: updatedTautulliSettings });
+        } else {
+          await Settings.create({ 
+            id: 1, 
+            tautulli: updatedTautulliSettings 
+          });
+        }
+      } catch (saveError) {
+        log.error({ error: saveError }, 'Error saving Tautulli connection status');
+      }
+    }
+    
+    if (connectionStatus === 'connected') {
+      return res.json({
+        success: true,
+        version,
+        connectionStatus,
+        lastConnectionTest: new Date().toISOString()
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error,
+        connectionStatus,
+        lastConnectionTest: new Date().toISOString()
+      });
+    }
+  } catch (error) {
+    log.error({ error }, 'Tautulli connection test failed');
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+      connectionStatus: 'error',
+      lastConnectionTest: new Date().toISOString()
+    });
+  }
+});
+
+// Get watch history from Tautulli
+router.get('/tautulli/history', async (req, res) => {
+  try {
+    // Get settings
+    const settings = await getSettings();
+    
+    if (!settings.tautulli || !settings.tautulli.enabled || !settings.tautulli.url || !settings.tautulli.apiKey) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Tautulli is not configured or enabled' 
+      });
+    }
+    
+    const { url, apiKey, historyDaysToSync = 30 } = settings.tautulli;
+    const { start = 0, length = 1000 } = req.query;
+    
+    // Calculate date range
+    const afterDate = Math.floor(Date.now() / 1000) - (historyDaysToSync * 24 * 60 * 60);
+    
+    // Make a request to the Tautulli API to get history
+    const response = await makeRequestWithRetry(
+      `${url}/api/v2`, 
+      {
+        method: 'get',
+        params: {
+          apikey: apiKey,
+          cmd: 'get_history',
+          start: start,
+          length: length,
+          after: afterDate,
+          order_column: 'date',
+          order_dir: 'desc'
+        },
+        timeout: 30000 // 30 second timeout
+      }
+    );
+    
+    if (response.data && response.data.response && response.data.response.result === 'success') {
+      return res.json({
+        success: true,
+        history: response.data.response.data
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid API response'
+      });
+    }
+  } catch (error) {
+    log.error({ error }, 'Error getting Tautulli history');
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get library statistics from Tautulli
+router.get('/tautulli/library-stats', async (req, res) => {
+  try {
+    // Get settings
+    const settings = await getSettings();
+    
+    if (!settings.tautulli || !settings.tautulli.enabled || !settings.tautulli.url || !settings.tautulli.apiKey) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Tautulli is not configured or enabled' 
+      });
+    }
+    
+    const { url, apiKey } = settings.tautulli;
+    
+    // Make a request to the Tautulli API to get library stats
+    const response = await makeRequestWithRetry(
+      `${url}/api/v2`, 
+      {
+        method: 'get',
+        params: {
+          apikey: apiKey,
+          cmd: 'get_libraries'
+        },
+        timeout: 30000 // 30 second timeout
+      }
+    );
+    
+    if (response.data && response.data.response && response.data.response.result === 'success') {
+      return res.json({
+        success: true,
+        libraries: response.data.response.data
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid API response'
+      });
+    }
+  } catch (error) {
+    log.error({ error }, 'Error getting Tautulli library stats');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -656,7 +878,8 @@ router.post('/test-all', async (req, res) => {
     const settings = await getSettings();
     const results = {
       sonarr: null,
-      radarr: null
+      radarr: null,
+      tautulli: null
     };
     
     // Test Sonarr if configured
@@ -721,6 +944,46 @@ router.post('/test-all', async (req, res) => {
       }
     }
     
+    // Test Tautulli if configured
+    if (settings.tautulli && settings.tautulli.enabled && settings.tautulli.url && settings.tautulli.apiKey) {
+      try {
+        const response = await makeRequestWithRetry(
+          `${settings.tautulli.url}/api/v2`, 
+          {
+            method: 'get',
+            params: {
+              apikey: settings.tautulli.apiKey,
+              cmd: 'get_server_info'
+            },
+            timeout: 10000
+          }
+        );
+        
+        if (response.data && response.data.response && response.data.response.result === 'success') {
+          results.tautulli = {
+            success: true,
+            connectionStatus: 'connected',
+            version: response.data.response.data?.version || 'Unknown',
+            lastConnectionTest: new Date().toISOString()
+          };
+        } else {
+          results.tautulli = {
+            success: false,
+            connectionStatus: 'error',
+            error: 'Invalid API response',
+            lastConnectionTest: new Date().toISOString()
+          };
+        }
+      } catch (error) {
+        results.tautulli = {
+          success: false,
+          connectionStatus: 'error',
+          error: error.message,
+          lastConnectionTest: new Date().toISOString()
+        };
+      }
+    }
+    
     // Update settings with new connection statuses
     try {
       const settingsRecord = await Settings.findOne({ where: { id: 1 } });
@@ -744,13 +1007,22 @@ router.post('/test-all', async (req, res) => {
         };
       }
       
+      if (results.tautulli) {
+        updateData.tautulli = {
+          ...settings.tautulli,
+          connectionStatus: results.tautulli.connectionStatus,
+          version: results.tautulli.version,
+          lastConnectionTest: results.tautulli.lastConnectionTest
+        };
+      }
+      
       if (settingsRecord) {
         await settingsRecord.update(updateData);
       } else {
         await Settings.create({ id: 1, ...updateData });
       }
     } catch (saveError) {
-      console.error('Error saving connection test results:', saveError.message);
+      log.error({ error: saveError }, 'Error saving connection test results');
     }
     
     return res.json({
@@ -758,7 +1030,7 @@ router.post('/test-all', async (req, res) => {
       results
     });
   } catch (error) {
-    console.error('Error testing integrations:', error.message);
+    log.error({ error }, 'Error testing integrations');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -800,7 +1072,7 @@ router.get('/sonarr/qualityprofiles', async (req, res) => {
       qualityProfiles: response.data
     });
   } catch (error) {
-    console.error('Error getting Sonarr quality profiles:', error.message);
+    log.error({ error }, 'Error getting Sonarr quality profiles');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -842,7 +1114,7 @@ router.get('/sonarr/qualitydefinitions', async (req, res) => {
       qualityDefinitions: response.data
     });
   } catch (error) {
-    console.error('Error getting Sonarr quality definitions:', error.message);
+    log.error({ error }, 'Error getting Sonarr quality definitions');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -884,7 +1156,7 @@ router.get('/radarr/qualityprofiles', async (req, res) => {
       qualityProfiles: response.data
     });
   } catch (error) {
-    console.error('Error getting Radarr quality profiles:', error.message);
+    log.error({ error }, 'Error getting Radarr quality profiles');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -926,7 +1198,7 @@ router.get('/radarr/qualitydefinitions', async (req, res) => {
       qualityDefinitions: response.data
     });
   } catch (error) {
-    console.error('Error getting Radarr quality definitions:', error.message);
+    log.error({ error }, 'Error getting Radarr quality definitions');
     return res.status(500).json({
       success: false,
       error: error.message

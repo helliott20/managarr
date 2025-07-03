@@ -1,9 +1,12 @@
 // backend/services/deletionExecutor.js
+const { createLogger } = require('../logger');
 const { PendingDeletion, Media, DeletionRule, DeletionHistory, Settings } = require('../database');
 const { Op } = require('sequelize');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
+
+const log = createLogger('deletionExecutor');
 
 class DeletionExecutor {
   constructor() {
@@ -29,7 +32,7 @@ class DeletionExecutor {
       try {
         callback(data);
       } catch (error) {
-        console.error('Error in progress callback:', error);
+        log.error({ error }, 'Error in progress callback');
       }
     });
   }
@@ -48,14 +51,14 @@ class DeletionExecutor {
         radarr: settings.radarr || {}
       };
       
-      console.log('Retrieved *arr settings:', {
+      log.debug({ 
         sonarrConfigured: !!(arrSettings.sonarr?.url && arrSettings.sonarr?.apiKey),
         radarrConfigured: !!(arrSettings.radarr?.url && arrSettings.radarr?.apiKey)
-      });
+      }, 'Retrieved *arr settings');
       
       return arrSettings;
     } catch (error) {
-      console.error('Error getting *arr settings:', error);
+      log.error({ error }, 'Error getting *arr settings');
       return { sonarr: {}, radarr: {} };
     }
   }
@@ -65,7 +68,7 @@ class DeletionExecutor {
     const { sonarr } = arrSettings;
     
     if (!sonarr || !sonarr.url || !sonarr.apiKey) {
-      console.log('Sonarr not configured, falling back to direct file deletion');
+      log.info('Sonarr not configured, falling back to direct file deletion');
       // Fallback to direct file deletion
       try {
         await fs.unlink(mediaSnapshot.path);
@@ -158,7 +161,7 @@ class DeletionExecutor {
 
       return results;
     } catch (error) {
-      console.error('Sonarr deletion error:', error);
+      log.error({ error }, 'Sonarr deletion error');
       throw new Error(`Sonarr deletion failed: ${error.message}`);
     }
   }
@@ -168,7 +171,7 @@ class DeletionExecutor {
     const { radarr } = arrSettings;
     
     if (!radarr || !radarr.url || !radarr.apiKey) {
-      console.log('Radarr not configured, falling back to direct file deletion');
+      log.info('Radarr not configured, falling back to direct file deletion');
       // Fallback to direct file deletion
       try {
         await fs.unlink(mediaSnapshot.path);
@@ -231,7 +234,7 @@ class DeletionExecutor {
 
       return results;
     } catch (error) {
-      console.error('Radarr deletion error:', error);
+      log.error({ error }, 'Radarr deletion error');
       throw new Error(`Radarr deletion failed: ${error.message}`);
     }
   }
@@ -301,10 +304,10 @@ class DeletionExecutor {
         const mediaRecord = await Media.findByPk(pendingDeletion.mediaId);
         if (mediaRecord) {
           // Just log instead of delete to avoid constraint issues
-          console.log(`Media record ${pendingDeletion.mediaId} marked for deletion but kept in database`);
+          log.debug({ mediaId: pendingDeletion.mediaId }, 'Media record marked for deletion but kept in database');
         }
       } catch (error) {
-        console.warn('Could not check media record:', error);
+        log.warn({ error }, 'Could not check media record');
       }
 
       this.emitProgress({
@@ -346,7 +349,7 @@ class DeletionExecutor {
           error: error.message
         });
       } catch (historyError) {
-        console.error('Error creating deletion history for failed deletion:', historyError);
+        log.error({ error: historyError }, 'Error creating deletion history for failed deletion');
       }
 
       this.emitProgress({
@@ -486,27 +489,27 @@ class DeletionExecutor {
           intervalMinutes = 60; // Default fallback
         }
       } catch (error) {
-        console.error('Error getting deletion executor interval from settings:', error);
+        log.error({ error }, 'Error getting deletion executor interval from settings');
         intervalMinutes = 60; // Default fallback
       }
     }
 
-    console.log(`Starting scheduled deletion execution every ${intervalMinutes} minutes`);
+    log.info({ intervalMinutes }, 'Starting scheduled deletion execution');
     
     // Run immediately on start
     try {
       await this.executeApprovedDeletions();
     } catch (error) {
-      console.error('Initial scheduled execution failed:', error);
+      log.error({ error }, 'Initial scheduled execution failed');
     }
 
     // Schedule recurring execution
     this.scheduledInterval = setInterval(async () => {
       try {
-        console.log('Running scheduled deletion execution...');
+        log.info('Running scheduled deletion execution...');
         await this.executeApprovedDeletions();
       } catch (error) {
-        console.error('Scheduled deletion execution failed:', error);
+        log.error({ error }, 'Scheduled deletion execution failed');
       }
     }, intervalMinutes * 60 * 1000);
   }
@@ -516,7 +519,7 @@ class DeletionExecutor {
     if (this.scheduledInterval) {
       clearInterval(this.scheduledInterval);
       this.scheduledInterval = null;
-      console.log('Scheduled deletion execution stopped');
+      log.info('Scheduled deletion execution stopped');
     }
   }
 

@@ -1,5 +1,8 @@
 // backend/services/notificationService.js
+const { createLogger } = require('../logger');
 const EventEmitter = require('events');
+
+const log = createLogger('notificationService');
 
 class NotificationService extends EventEmitter {
   constructor() {
@@ -27,7 +30,11 @@ class NotificationService extends EventEmitter {
     // Emit the notification for real-time updates
     this.emit('notification', newNotification);
     
-    console.log(`📢 Notification: [${notification.category?.toUpperCase()}] ${notification.title}`);
+    log.info({ 
+      category: notification.category?.toUpperCase(), 
+      title: notification.title,
+      type: notification.type 
+    }, 'Notification added');
     return newNotification;
   }
 

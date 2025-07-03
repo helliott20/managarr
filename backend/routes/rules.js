@@ -1,9 +1,12 @@
 // backend/routes/rules.js
+const { createLogger } = require('../logger');
 const express = require('express');
 const router = express.Router();
 const { Media, DeletionRule, DeletionHistory, Settings, PendingDeletion } = require('../database');
 const { Op } = require('sequelize');
 const axios = require('axios');
+
+const log = createLogger('rules');
 
 // Helper function for making API requests with retries
 async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2000) {
@@ -16,7 +19,7 @@ async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`API request attempt ${attempt}/${maxRetries}: ${url}`);
+      log.debug({ attempt, maxRetries, url }, 'API request attempt');
       const response = await axios(url, options);
       return response;
     } catch (error) {
@@ -26,23 +29,37 @@ async function makeRequestWithRetry(url, options, maxRetries = 3, retryDelay = 2
       if (error.response) {
         // The request was made and the server responded with a status code
         // that falls out of the range of 2xx
-        console.error(`Attempt ${attempt}/${maxRetries} failed with status ${error.response.status}:`, error.message);
-        console.error('Response data:', error.response.data);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          status: error.response.status, 
+          message: error.message,
+          responseData: error.response.data 
+        }, 'API request failed with response error');
       } else if (error.request) {
         // The request was made but no response was received
-        console.error(`Attempt ${attempt}/${maxRetries} failed (no response):`, error.message);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          message: error.message,
+          code: error.code 
+        }, 'API request failed with no response');
         if (error.code === 'ECONNABORTED') {
-          console.error('Request timed out. Consider increasing the timeout value.');
+          log.warn('Request timed out. Consider increasing the timeout value.');
         }
       } else {
         // Something happened in setting up the request that triggered an Error
-        console.error(`Attempt ${attempt}/${maxRetries} failed (request setup):`, error.message);
+        log.error({ 
+          attempt, 
+          maxRetries, 
+          message: error.message 
+        }, 'API request failed during setup');
       }
       
       // If this is not the last attempt, wait before retrying
       if (attempt < maxRetries) {
         const delay = retryDelay * attempt; // Exponential backoff
-        console.log(`Retrying in ${delay}ms...`);
+        log.info({ delay }, 'Retrying API request');
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -58,7 +75,7 @@ async function getSettings() {
     const settings = await Settings.findOne({ where: { id: 1 } });
     return settings || {};
   } catch (error) {
-    console.error('Error getting settings:', error);
+    log.error({ error }, 'Error getting settings');
     return {};
   }
 }
@@ -69,7 +86,7 @@ router.get('/', async (req, res) => {
     const rules = await DeletionRule.findAll();
     res.json(rules);
   } catch (err) {
-    console.error('Error in /rules GET:', err);
+    log.error({ error: err }, 'Error in /rules GET');
     res.status(500).json({ message: err.message });
   }
 });
@@ -80,7 +97,7 @@ router.post('/', async (req, res) => {
     const newRule = await DeletionRule.create(req.body);
     res.status(201).json(newRule);
   } catch (err) {
-    console.error('Error in /rules POST:', err);
+    log.error({ error: err }, 'Error in /rules POST');
     res.status(400).json({ message: err.message });
   }
 });
@@ -94,7 +111,7 @@ router.get('/:id', async (req, res) => {
     }
     res.json(rule);
   } catch (err) {
-    console.error('Error in /rules/:id GET:', err);
+    log.error({ error: err, ruleId: req.params.id }, 'Error in /rules/:id GET');
     res.status(500).json({ message: err.message });
   }
 });
@@ -102,26 +119,25 @@ router.get('/:id', async (req, res) => {
 // Update a rule
 router.put('/:id', async (req, res) => {
   try {
-    console.log(`Updating rule ${req.params.id} with data:`, JSON.stringify(req.body, null, 2));
+    log.debug({ ruleId: req.params.id, updateData: req.body }, 'Updating rule');
     
     const rule = await DeletionRule.findByPk(req.params.id);
     if (!rule) {
       return res.status(404).json({ message: 'Rule not found' });
     }
     
-    console.log('Current rule before update:', JSON.stringify(rule.toJSON(), null, 2));
+    log.debug({ currentRule: rule.toJSON() }, 'Current rule before update');
     
     // Update the rule with the new data
     await rule.update(req.body);
     
     // Fetch the updated rule to return
     const updatedRule = await DeletionRule.findByPk(req.params.id);
-    console.log('Rule after update:', JSON.stringify(updatedRule.toJSON(), null, 2));
+    log.debug({ updatedRule: updatedRule.toJSON() }, 'Rule after update');
     
     res.json(updatedRule);
   } catch (err) {
-    console.error('Error in /rules/:id PUT:', err);
-    console.error('Request body that caused error:', req.body);
+    log.error({ error: err, ruleId: req.params.id, requestBody: req.body }, 'Error in /rules/:id PUT');
     res.status(400).json({ message: err.message });
   }
 });
@@ -148,7 +164,7 @@ router.delete('/:id', async (req, res) => {
     await rule.destroy();
     res.json({ message: 'Rule deleted successfully' });
   } catch (err) {
-    console.error('Error in /rules/:id DELETE:', err);
+    log.error({ error: err, ruleId: req.params.id }, 'Error in /rules/:id DELETE');
     res.status(500).json({ message: err.message });
   }
 });
@@ -160,10 +176,10 @@ router.post('/preview', async (req, res) => {
     const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || false;
     
     // Debug logging
-    console.log('Preview API received rule:', {
-      conditions: rule.conditions,
-      filtersEnabled: rule.filtersEnabled
-    });
+    log.debug({ 
+      conditions: rule.conditions, 
+      filtersEnabled: rule.filtersEnabled 
+    }, 'Preview API received rule');
     
     let affectedMedia = [];
     let totalSize = 0;
@@ -184,7 +200,8 @@ router.post('/preview', async (req, res) => {
         status: 0,
         title: 0,
         mediaSpecific: 0,
-        arrIntegration: 0
+        arrIntegration: 0,
+        tautulli: 0
       },
       qualityDataStats: {
         hasResolution: 0,
@@ -271,13 +288,13 @@ router.post('/preview', async (req, res) => {
     affectedMedia.sort((a, b) => b.size - a.size);
     
     // Log summary statistics
-    console.log('=== FILTER SUMMARY ===');
-    console.log(`Total media processed: ${filterStats.totalProcessed}`);
-    console.log(`Media included: ${filterStats.includedCount}`);
-    console.log(`Media excluded: ${filterStats.totalProcessed - filterStats.includedCount}`);
-    console.log(`Exclusions by filter:`, filterStats.excludedByFilter);
-    console.log(`Quality data availability:`, filterStats.qualityDataStats);
-    console.log('=====================');
+    log.info({ 
+      totalProcessed: filterStats.totalProcessed,
+      includedCount: filterStats.includedCount,
+      excludedCount: filterStats.totalProcessed - filterStats.includedCount,
+      exclusionsByFilter: filterStats.excludedByFilter,
+      qualityDataStats: filterStats.qualityDataStats
+    }, 'Filter summary completed');
     
     return res.json({
       success: true,
@@ -286,7 +303,7 @@ router.post('/preview', async (req, res) => {
       stats
     });
   } catch (error) {
-    console.error('Error previewing rule:', error);
+    log.error({ error }, 'Error previewing rule');
     return res.status(500).json({
       success: false,
       error: error.message
@@ -303,7 +320,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     const daysSinceAdded = Math.floor((new Date() - new Date(media.added)) / (1000 * 60 * 60 * 24));
     if (daysSinceAdded < conditions.minAge) {
       if (filterStats) filterStats.excludedByFilter.age++;
-      if (verbose) console.log(`Media excluded by age filter: ${media.title} (${daysSinceAdded} days old, need ${conditions.minAge})`);
+      if (verbose) log.debug({ 
+        mediaTitle: media.title, 
+        daysSinceAdded, 
+        requiredMinAge: conditions.minAge 
+      }, 'Media excluded by age filter');
       return false;
     }
   }
@@ -313,7 +334,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     const rating = getRatingValue(media.ratings) || 0;
     if (rating < conditions.minRating) {
       if (filterStats) filterStats.excludedByFilter.quality++;
-      if (verbose) console.log(`Media excluded by rating filter: ${media.title} (rating ${rating}, need ${conditions.minRating})`);
+      if (verbose) log.debug({ 
+        mediaTitle: media.title, 
+        rating, 
+        requiredMinRating: conditions.minRating 
+      }, 'Media excluded by rating filter');
       return false;
     }
   }
@@ -343,7 +368,7 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
   
   // Enhanced quality filters
   if (filtersEnabled.enhancedQuality) {
-    if (verbose) console.log('Enhanced quality filter enabled, checking resolution and quality profile...');
+    if (verbose) log.debug('Enhanced quality filter enabled, checking resolution and quality profile...');
     
     if (conditions.resolution && conditions.resolution !== 'any') {
       // Try to get resolution from multiple sources
@@ -352,11 +377,17 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
       const mediaQualityProfile = media.qualityProfile || '';
       const mediaCodec = media.codec || '';
       
-      if (verbose) console.log(`Resolution filter: looking for "${conditions.resolution}", media has resolution="${mediaResolution}", qualityName="${mediaQualityName}", qualityProfile="${mediaQualityProfile}", codec="${mediaCodec}"`);
+      if (verbose) log.debug({ 
+        lookingFor: conditions.resolution,
+        mediaResolution,
+        mediaQualityName,
+        mediaQualityProfile,
+        mediaCodec
+      }, 'Resolution filter check');
       
       // If media has no resolution data, don't filter it out (include it)
       if (!mediaResolution && !mediaQualityName && !mediaQualityProfile) {
-        if (verbose) console.log(`Media has no resolution/quality data, including: ${media.title}`);
+        if (verbose) log.debug({ mediaTitle: media.title }, 'Media has no resolution/quality data, including');
       } else {
         // Check if the condition matches any of the quality-related fields
         const conditionLower = conditions.resolution.toLowerCase();
@@ -372,7 +403,7 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
         
         if (conditions.resolution !== 'other' && !matchesResolution && !matchesQualityName && !matchesQualityProfile && !matchesCodec) {
           if (filterStats) filterStats.excludedByFilter.enhancedQuality++;
-          if (verbose) console.log(`Media excluded due to resolution filter: ${media.title}`);
+          if (verbose) log.debug({ mediaTitle: media.title }, 'Media excluded due to resolution filter');
           return false;
         }
       }
@@ -381,11 +412,15 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     if (conditions.qualityProfile && conditions.qualityProfile !== 'any') {
       const mediaQualityProfile = media.qualityProfile || '';
       const mediaQualityName = media.qualityName || '';
-      if (verbose) console.log(`Quality profile filter: looking for "${conditions.qualityProfile}", media has qualityProfile="${mediaQualityProfile}", qualityName="${mediaQualityName}"`);
+      if (verbose) log.debug({ 
+        lookingFor: conditions.qualityProfile,
+        mediaQualityProfile,
+        mediaQualityName
+      }, 'Quality profile filter check');
       
       // If media has no quality data, don't filter it out (include it)
       if (!mediaQualityProfile && !mediaQualityName) {
-        if (verbose) console.log(`Media has no quality profile data, including: ${media.title}`);
+        if (verbose) log.debug({ mediaTitle: media.title }, 'Media has no quality profile data, including');
       } else {
         const conditionLower = conditions.qualityProfile.toLowerCase();
         const mediaQualityProfileLower = mediaQualityProfile.toLowerCase();
@@ -396,7 +431,7 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
         
         if (!matchesProfile && !matchesName) {
           if (filterStats) filterStats.excludedByFilter.enhancedQuality++;
-          if (verbose) console.log(`Media excluded due to quality profile filter: ${media.title}`);
+          if (verbose) log.debug({ mediaTitle: media.title }, 'Media excluded due to quality profile filter');
           return false;
         }
       }
@@ -409,13 +444,21 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     
     if (conditions.minSize > 0 && sizeGB < conditions.minSize) {
       if (filterStats) filterStats.excludedByFilter.size++;
-      if (verbose) console.log(`Media excluded by size filter (too small): ${media.title} (${sizeGB.toFixed(2)}GB < ${conditions.minSize}GB)`);
+      if (verbose) log.debug({ 
+        mediaTitle: media.title, 
+        sizeGB: sizeGB.toFixed(2), 
+        minSize: conditions.minSize 
+      }, 'Media excluded by size filter (too small)');
       return false;
     }
     
     if (conditions.maxSize > 0 && sizeGB > conditions.maxSize) {
       if (filterStats) filterStats.excludedByFilter.size++;
-      if (verbose) console.log(`Media excluded by size filter (too large): ${media.title} (${sizeGB.toFixed(2)}GB > ${conditions.maxSize}GB)`);
+      if (verbose) log.debug({ 
+        mediaTitle: media.title, 
+        sizeGB: sizeGB.toFixed(2), 
+        maxSize: conditions.maxSize 
+      }, 'Media excluded by size filter (too large)');
       return false;
     }
   }
@@ -424,7 +467,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
   if (filtersEnabled.status && conditions.watchStatus !== 'any') {
     if (media.watchStatus !== conditions.watchStatus) {
       if (filterStats) filterStats.excludedByFilter.status++;
-      if (verbose) console.log(`Media excluded by watch status filter: ${media.title} (status: ${media.watchStatus}, need: ${conditions.watchStatus})`);
+      if (verbose) log.debug({ 
+        mediaTitle: media.title, 
+        currentStatus: media.watchStatus, 
+        requiredStatus: conditions.watchStatus 
+      }, 'Media excluded by watch status filter');
       return false;
     }
   }
@@ -440,7 +487,10 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
       
       if (!mediaTitleLower.includes(titleContainsLower)) {
         if (filterStats) filterStats.excludedByFilter.title++;
-        if (verbose) console.log(`Media excluded by title contains filter: ${media.title} (does not contain "${conditions.titleContains}")`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          requiredContains: conditions.titleContains 
+        }, 'Media excluded by title contains filter');
         return false;
       }
     }
@@ -452,7 +502,10 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
       
       if (mediaTitleLower !== titleExactLower) {
         if (filterStats) filterStats.excludedByFilter.title++;
-        if (verbose) console.log(`Media excluded by title exact filter: ${media.title} (does not exactly match "${conditions.titleExact}")`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          requiredExact: conditions.titleExact 
+        }, 'Media excluded by title exact filter');
         return false;
       }
     }
@@ -463,7 +516,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     if (conditions.seriesStatus && conditions.seriesStatus !== 'any') {
       if (media.status !== conditions.seriesStatus) {
         if (filterStats) filterStats.excludedByFilter.mediaSpecific++;
-        if (verbose) console.log(`Media excluded by series status filter: ${media.title} (status: ${media.status}, need: ${conditions.seriesStatus})`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          currentStatus: media.status, 
+          requiredStatus: conditions.seriesStatus 
+        }, 'Media excluded by series status filter');
         return false;
       }
     }
@@ -471,7 +528,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     if (conditions.network && conditions.network !== 'any') {
       if (media.network !== conditions.network) {
         if (filterStats) filterStats.excludedByFilter.mediaSpecific++;
-        if (verbose) console.log(`Media excluded by network filter: ${media.title} (network: ${media.network}, need: ${conditions.network})`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          currentNetwork: media.network, 
+          requiredNetwork: conditions.network 
+        }, 'Media excluded by network filter');
         return false;
       }
     }
@@ -482,7 +543,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     if (conditions.monitoringStatus && conditions.monitoringStatus !== 'any') {
       if (media.monitored !== (conditions.monitoringStatus === 'monitored')) {
         if (filterStats) filterStats.excludedByFilter.arrIntegration++;
-        if (verbose) console.log(`Media excluded by monitoring status filter: ${media.title} (monitored: ${media.monitored}, need: ${conditions.monitoringStatus})`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          currentMonitored: media.monitored, 
+          requiredStatus: conditions.monitoringStatus 
+        }, 'Media excluded by monitoring status filter');
         return false;
       }
     }
@@ -490,7 +555,11 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
     if (conditions.downloadStatus && conditions.downloadStatus !== 'any') {
       if (media.status !== conditions.downloadStatus) {
         if (filterStats) filterStats.excludedByFilter.arrIntegration++;
-        if (verbose) console.log(`Media excluded by download status filter: ${media.title} (status: ${media.status}, need: ${conditions.downloadStatus})`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          currentStatus: media.status, 
+          requiredStatus: conditions.downloadStatus 
+        }, 'Media excluded by download status filter');
         return false;
       }
     }
@@ -500,8 +569,78 @@ function shouldIncludeMedia(media, rule, filterStats = null, verbose = false) {
       const ruleTags = conditions.tags.split(',').map(tag => tag.trim());
       if (!ruleTags.some(tag => mediaTags.includes(tag))) {
         if (filterStats) filterStats.excludedByFilter.arrIntegration++;
-        if (verbose) console.log(`Media excluded by tags filter: ${media.title} (tags: ${mediaTags.join(',')}, need one of: ${ruleTags.join(',')})`);
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          currentTags: mediaTags, 
+          requiredTags: ruleTags 
+        }, 'Media excluded by tags filter');
         return false;
+      }
+    }
+  }
+  
+  // Tautulli integration filters
+  if (filtersEnabled.tautulli) {
+    // Max view count filter
+    if (conditions.maxViewCount && conditions.maxViewCount > 0) {
+      const viewCount = media.tautulliViewCount || 0;
+      if (viewCount > conditions.maxViewCount) {
+        if (filterStats) filterStats.excludedByFilter.tautulli = (filterStats.excludedByFilter.tautulli || 0) + 1;
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          viewCount, 
+          maxViewCount: conditions.maxViewCount 
+        }, 'Media excluded by max view count filter');
+        return false;
+      }
+    }
+    
+    // Min view count filter
+    if (conditions.minViewCount && conditions.minViewCount > 0) {
+      const viewCount = media.tautulliViewCount || 0;
+      if (viewCount < conditions.minViewCount) {
+        if (filterStats) filterStats.excludedByFilter.tautulli = (filterStats.excludedByFilter.tautulli || 0) + 1;
+        if (verbose) log.debug({ 
+          mediaTitle: media.title, 
+          viewCount, 
+          minViewCount: conditions.minViewCount 
+        }, 'Media excluded by min view count filter');
+        return false;
+      }
+    }
+    
+    // Days since last watched filter
+    if (conditions.daysSinceLastWatched && conditions.daysSinceLastWatched > 0) {
+      const lastPlayed = media.tautulliLastPlayed;
+      if (lastPlayed) {
+        const daysSince = Math.floor((new Date() - new Date(lastPlayed)) / (1000 * 60 * 60 * 24));
+        if (daysSince < conditions.daysSinceLastWatched) {
+          if (filterStats) filterStats.excludedByFilter.tautulli = (filterStats.excludedByFilter.tautulli || 0) + 1;
+          if (verbose) log.debug({ 
+            mediaTitle: media.title, 
+            daysSince, 
+            minDaysSince: conditions.daysSinceLastWatched 
+          }, 'Media excluded by days since last watched filter');
+          return false;
+        }
+      }
+    }
+    
+    // Watch percentage filter
+    if (conditions.minWatchPercentage && conditions.minWatchPercentage > 0) {
+      const watchTime = media.tautulliWatchTime || 0;
+      const duration = media.tautulliDuration || 0;
+      if (duration > 0) {
+        const watchPercentage = (watchTime / duration) * 100;
+        if (watchPercentage < conditions.minWatchPercentage) {
+          if (filterStats) filterStats.excludedByFilter.tautulli = (filterStats.excludedByFilter.tautulli || 0) + 1;
+          if (verbose) log.debug({ 
+            mediaTitle: media.title, 
+            watchPercentage: watchPercentage.toFixed(1), 
+            minWatchPercentage: conditions.minWatchPercentage 
+          }, 'Media excluded by watch percentage filter');
+          return false;
+        }
       }
     }
   }
@@ -579,7 +718,7 @@ router.post('/:id/run', async (req, res) => {
       return res.status(400).json({ message: 'Rule is disabled' });
     }
     
-    console.log(`Running rule: ${rule.name} (ID: ${rule.id})`);
+    log.info({ ruleName: rule.name, ruleId: rule.id }, 'Running rule');
     
     // Create pending deletions instead of immediate deletion
     const result = await createPendingDeletions(rule);
@@ -597,14 +736,14 @@ router.post('/:id/run', async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Error in /rules/:id/run:', err);
+    log.error({ error: err, ruleId: req.params.id }, 'Error in /rules/:id/run');
     res.status(500).json({ message: err.message });
   }
 });
 
 // Helper function to create pending deletions from rule execution
 async function createPendingDeletions(rule) {
-  console.log(`Creating pending deletions for rule: ${rule.name}`);
+  log.info({ ruleName: rule.name }, 'Creating pending deletions for rule');
   
   const { conditions, filtersEnabled } = rule;
   
@@ -631,7 +770,7 @@ async function createPendingDeletions(rule) {
     }
   });
 
-  console.log(`Found ${allMedia.length} media items to process`);
+  log.info({ mediaCount: allMedia.length }, 'Found media items to process');
   
   let affectedMedia = [];
   let totalSize = 0;
@@ -647,7 +786,7 @@ async function createPendingDeletions(rule) {
     }
   }
 
-  console.log(`${affectedMedia.length} media items match the rule conditions`);
+  log.info({ affectedCount: affectedMedia.length }, 'Media items match rule conditions');
   
   // Create pending deletion records
   const pendingDeletions = [];
@@ -664,7 +803,7 @@ async function createPendingDeletions(rule) {
       });
       
       if (existingPending) {
-        console.log(`Pending deletion already exists for media ${media.id}, skipping`);
+        log.debug({ mediaId: media.id }, 'Pending deletion already exists, skipping');
         continue;
       }
       
@@ -700,11 +839,11 @@ async function createPendingDeletions(rule) {
       pendingDeletions.push(pendingDeletion);
       
     } catch (error) {
-      console.error(`Error creating pending deletion for media ${media.id}:`, error);
+      log.error({ error, mediaId: media.id }, 'Error creating pending deletion for media');
     }
   }
 
-  console.log(`Created ${pendingDeletions.length} pending deletions`);
+  log.info({ pendingDeletionsCount: pendingDeletions.length }, 'Created pending deletions');
 
   return {
     pendingCount: pendingDeletions.length,
@@ -730,9 +869,9 @@ async function createPendingDeletions(rule) {
 // This function was previously deleting files directly without user confirmation
 // It has been replaced by createPendingDeletions for safety
 async function executeRule_DISABLED_FOR_SAFETY(rule) {
-  console.error('⚠️  SAFETY WARNING: executeRule function has been disabled!');
-  console.error('⚠️  This function was directly deleting files without user confirmation.');
-  console.error('⚠️  Use createPendingDeletions instead to create pending deletions for user approval.');
+  log.warn('SAFETY WARNING: executeRule function has been disabled!');
+  log.warn('This function was directly deleting files without user confirmation.');
+  log.warn('Use createPendingDeletions instead to create pending deletions for user approval.');
   throw new Error('executeRule function has been disabled for safety. Use createPendingDeletions instead.');
   
   // ORIGINAL DANGEROUS CODE COMMENTED OUT:
@@ -1071,7 +1210,7 @@ router.get('/:id/stats', async (req, res) => {
       totalSizeFreedGB: (totalSizeFreed / (1024 * 1024 * 1024)).toFixed(2)
     });
   } catch (err) {
-    console.error('Error getting rule statistics:', err);
+    log.error({ error: err, ruleId: req.params.id }, 'Error getting rule statistics');
     res.status(500).json({ message: err.message });
   }
 });
@@ -1109,7 +1248,7 @@ router.get('/stats/all', async (req, res) => {
     const allStats = await Promise.all(statsPromises);
     res.json(allStats);
   } catch (err) {
-    console.error('Error getting all rules statistics:', err);
+    log.error({ error: err }, 'Error getting all rules statistics');
     res.status(500).json({ message: err.message });
   }
 });

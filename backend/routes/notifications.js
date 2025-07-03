@@ -1,7 +1,10 @@
 // backend/routes/notifications.js
+const { createLogger } = require('../logger');
 const express = require('express');
 const router = express.Router();
 const notificationService = require('../services/notificationService');
+
+const log = createLogger('notifications');
 
 // Get all notifications
 router.get('/', (req, res) => {
@@ -15,7 +18,7 @@ router.get('/', (req, res) => {
       summary
     });
   } catch (error) {
-    console.error('Error getting notifications:', error);
+    log.error({ error }, 'Error getting notifications');
     res.status(500).json({
       success: false,
       error: 'Failed to get notifications'
@@ -32,7 +35,7 @@ router.get('/summary', (req, res) => {
       summary
     });
   } catch (error) {
-    console.error('Error getting notification summary:', error);
+    log.error({ error }, 'Error getting notification summary');
     res.status(500).json({
       success: false,
       error: 'Failed to get notification summary'
@@ -58,7 +61,7 @@ router.post('/:id/read', (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error marking notification as read:', error);
+    log.error({ error, notificationId: id }, 'Error marking notification as read');
     res.status(500).json({
       success: false,
       error: 'Failed to mark notification as read'
@@ -75,7 +78,7 @@ router.post('/read-all', (req, res) => {
       message: `${updatedCount} notifications marked as read`
     });
   } catch (error) {
-    console.error('Error marking all notifications as read:', error);
+    log.error({ error }, 'Error marking all notifications as read');
     res.status(500).json({
       success: false,
       error: 'Failed to mark all notifications as read'
@@ -101,7 +104,7 @@ router.delete('/:id', (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error removing notification:', error);
+    log.error({ error, notificationId: id }, 'Error removing notification');
     res.status(500).json({
       success: false,
       error: 'Failed to remove notification'
@@ -118,7 +121,7 @@ router.delete('/', (req, res) => {
       message: `${removedCount} notifications cleared`
     });
   } catch (error) {
-    console.error('Error clearing notifications:', error);
+    log.error({ error }, 'Error clearing notifications');
     res.status(500).json({
       success: false,
       error: 'Failed to clear notifications'
@@ -151,7 +154,7 @@ router.post('/test', (req, res) => {
       message: 'Test notification added'
     });
   } catch (error) {
-    console.error('Error adding test notification:', error);
+    log.error({ error }, 'Error adding test notification');
     res.status(500).json({
       success: false,
       error: 'Failed to add test notification'

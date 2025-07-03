@@ -1,8 +1,11 @@
 // backend/routes/pendingDeletions.js
+const { createLogger } = require('../logger');
 const express = require('express');
 const { PendingDeletion, Media, DeletionRule } = require('../database');
 const { Op } = require('sequelize');
 const deletionExecutor = require('../services/deletionExecutor');
+
+const log = createLogger('pendingDeletions');
 
 const router = express.Router();
 
@@ -70,7 +73,7 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching pending deletions:', error);
+    log.error({ error }, 'Error fetching pending deletions');
     res.status(500).json({
       success: false,
       error: 'Failed to fetch pending deletions'
@@ -108,7 +111,7 @@ router.get('/:id', async (req, res) => {
       data: pendingDeletion
     });
   } catch (error) {
-    console.error('Error fetching pending deletion:', error);
+    log.error({ error, pendingDeletionId: id }, 'Error fetching pending deletion');
     res.status(500).json({
       success: false,
       error: 'Failed to fetch pending deletion'
@@ -152,7 +155,7 @@ router.post('/:id/approve', async (req, res) => {
       data: pendingDeletion
     });
   } catch (error) {
-    console.error('Error approving pending deletion:', error);
+    log.error({ error, pendingDeletionId: id }, 'Error approving pending deletion');
     res.status(500).json({
       success: false,
       error: 'Failed to approve pending deletion'
@@ -195,7 +198,7 @@ router.post('/:id/cancel', async (req, res) => {
       data: pendingDeletion
     });
   } catch (error) {
-    console.error('Error cancelling pending deletion:', error);
+    log.error({ error, pendingDeletionId: id }, 'Error cancelling pending deletion');
     res.status(500).json({
       success: false,
       error: 'Failed to cancel pending deletion'
@@ -244,7 +247,7 @@ router.post('/bulk-approve', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error bulk approving pending deletions:', error);
+    log.error({ error, idsCount: ids?.length }, 'Error bulk approving pending deletions');
     res.status(500).json({
       success: false,
       error: 'Failed to bulk approve pending deletions'
@@ -289,7 +292,7 @@ router.post('/bulk-cancel', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error bulk cancelling pending deletions:', error);
+    log.error({ error, idsCount: ids?.length }, 'Error bulk cancelling pending deletions');
     res.status(500).json({
       success: false,
       error: 'Failed to bulk cancel pending deletions'
@@ -351,7 +354,7 @@ router.get('/stats/summary', async (req, res) => {
       data: summary
     });
   } catch (error) {
-    console.error('Error fetching pending deletions summary:', error);
+    log.error({ error }, 'Error fetching pending deletions summary');
     res.status(500).json({
       success: false,
       error: 'Failed to fetch summary'
@@ -370,7 +373,7 @@ router.post('/execute', async (req, res) => {
       data: result
     });
   } catch (error) {
-    console.error('Error executing pending deletions:', error);
+    log.error({ error }, 'Error executing pending deletions');
     res.status(500).json({
       success: false,
       error: error.message
@@ -388,7 +391,7 @@ router.get('/execution/status', async (req, res) => {
       data: status
     });
   } catch (error) {
-    console.error('Error getting execution status:', error);
+    log.error({ error }, 'Error getting execution status');
     res.status(500).json({
       success: false,
       error: 'Failed to get execution status'
@@ -412,7 +415,7 @@ router.post('/execution/schedule/start', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error starting scheduled execution:', error);
+    log.error({ error }, 'Error starting scheduled execution');
     res.status(500).json({
       success: false,
       error: error.message
@@ -433,7 +436,7 @@ router.post('/execution/schedule/stop', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error stopping scheduled execution:', error);
+    log.error({ error }, 'Error stopping scheduled execution');
     res.status(500).json({
       success: false,
       error: error.message
